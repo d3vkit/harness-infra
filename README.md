@@ -36,6 +36,15 @@ app DB (5433), and kyra's Supabase DB (54322).
 - Each app seeds its own tier with `HARNESS_APP=<app> ruby script/build_harness_db.rb`
   (app-scoped: it only deletes/reseeds its own rows; the `global` tier is shared).
 
+## Global rule-tier sync
+
+`global_rules.sha256` is the **canonical hash** of the shared Universal Rules (the
+`app='global'` harness tier). Each app's `bin/ci` runs `script/check_global_rules_sync.sh`,
+which hashes its own `.github/copilot-instructions.md` (minus the per-repo marker line)
+and fails if it doesn't match this value. To change universal rules: edit them
+identically in **every** app repo, bump this hash in the same change, and rebuild each
+app's harness. Any app left unmirrored fails CI (its rules ≠ this canonical hash).
+
 ## Data
 
 The `agent_harness` schema is created/seeded by each app's `build_harness_db.rb`
