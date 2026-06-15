@@ -1,0 +1,43 @@
+# Dedicated shared harness Postgres — owned by the pamm repo but shared across all agent apps.
+#
+# Usage (from this directory or with -f):
+#   docker compose -f harness-infra/compose.yaml up -d
+#
+# Creates the `agent-harness-net` external network on first run:
+#   docker network create agent-harness-net
+#
+# Ports:
+#   host: 127.0.0.1:55432  (avoids 5432 system / 5433 pamm-app / 54322 kyra collisions)
+#   in-container (on agent-harness-net): harness-db:5432
+#
+# Apps join this network from their devcontainer compose (see .devcontainer/compose.yaml).
+# Scripts and hooks use script/lib/harness_env.sh to detect which address to use.
+
+name: "agent-harness-infra"
+
+services:
+  harness-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      # No POSTGRES_DB: default `postgres` database holds the agent_harness schema.
+    volumes:
+      - harness_pg_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:55432:5432"
+    networks:
+      - agent-harness-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  harness_pg_data:
+
+networks:
+  agent-harness-net:
+    external: true
