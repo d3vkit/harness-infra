@@ -1,11 +1,12 @@
-# Canonical SHA-256 of the shared Universal Rules (the app='global' harness tier).
-# Source of truth for cross-app rule-tier sync (see each app's Universal Rule #27).
+# RETIRED — this canonical-hash drift guard is no longer used.
 #
-# Computed as:
-#   sed '/^> MCP Last Synced Hash:/d' .github/copilot-instructions.md | shasum -a 256
+# Global rules used to be mirrored byte-identically into every app's
+# .github/copilot-instructions.md and verified against this hash by each app's
+# script/check_global_rules_sync.sh. That mechanism is retired: the global rule
+# tiers are now owned centrally in harness-infra/rules/global-*.md and seeded by
+# harness-infra/script/build_global_rules.rb (the single source of truth — no
+# mirroring, no hash to keep in sync). See README.md and
+# docs/runbooks/new-harness-integration.md.
 #
-# Every app's bin/ci runs script/check_global_rules_sync.sh, which compares its
-# local universal-rules hash to this value. Changing universal rules requires
-# updating them identically in EVERY app repo AND bumping this hash in the same
-# change — otherwise the unmirrored app's CI fails (its rules != this canonical).
-a69962ee266a742cb970510f694aa2228a5b1a004c32e9bd07568ddb8485ddcd
+# This file is kept only as a tombstone so stale references resolve. It can be
+# deleted once no app still ships check_global_rules_sync.sh.
