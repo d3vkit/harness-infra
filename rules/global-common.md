@@ -17,7 +17,7 @@ Stack-specific universal rules live in the sibling files `global-rails.md`,
 - No repository-managed cross-repo handoff docs. Summarize cross-repo work directly in the task/PR/thread context.
 - Use the Explore subagent to offload research tasks — it runs separately and returns only a summary, not raw file contents.
 - Use `| tail -N` or `| grep` when running commands that produce verbose output.
-- Never checkout, change, or merge into the `main` branch. All work happens on feature branches. Agent worktree branches merge into the feature branch, never into `main`. `main` is the production branch — only the user or CI merges into it.
+- Do not commit directly to `main` or develop on it — all work happens on feature branches, and agent worktree branches merge into their feature branch. Agents may merge a feature branch (or its reviewed PR) into `main` only after review has passed and CI is green; never merge unreviewed or failing work into `main`. `main` is the production branch.
 - Our focus is on writing high quality code the first time no matter how long that takes. We don't need to move fast.
 - Keep docs updated when behavior changes. Update the project's documentation — README plus any architecture, design, runbook, API, or roadmap docs — whenever behavior, interfaces, runtime env vars, the data model, or critical workflows change. (Stack-specific apps may pin exact filenames in their stack or app tier.)
 - New agent rules and guardrails must be saved to the harness, never to ad-hoc or file-based memory. Add app-specific rules to your app's `docs/harness/<app>-rules.md` (or role docs) and rebuild your app tier; propose universal or stack rules by editing the canonical files in `harness-infra/rules/`. The harness is the canonical rule store.
