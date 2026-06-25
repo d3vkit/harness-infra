@@ -21,7 +21,7 @@ never insert, delete, or rewrite any `global*` tier — those are owned centrall
 An app seeder must `abort` if `HARNESS_APP` starts with `global`.
 
 Current participants: **rails** = kyra, pamm, postcard · **expo** = cooldown · **godot**
-= riftling, terminal-ai.
+= riftling, terminal-ai · **unreal** = pirates-life.
 
 ## Onboarding a new app — file checklist
 
