@@ -7,7 +7,8 @@ category; each bullet is one rule; severity is inferred from the wording
 (never/must/always/do-not/non-negotiable → critical).
 
 Stack-specific universal rules live in the sibling files `global-rails.md`,
-`global-expo.md`, and `global-godot.md`, each seeded into its own `global-<stack>` tier.
+`global-expo.md`, `global-godot.md`, and `global-unreal.md`, each seeded into its own
+`global-<stack>` tier.
 
 ## Workflow
 
@@ -24,7 +25,7 @@ Stack-specific universal rules live in the sibling files `global-rails.md`,
 - New agent rules and guardrails must be saved to the harness, never to ad-hoc or file-based memory. Add app-specific rules to your app's `docs/harness/<app>-rules.md` (or role docs) and rebuild your app tier; propose universal or stack rules by editing the canonical files in `harness-infra/rules/`. The harness is the canonical rule store.
 - Always read and update the harness work log. Read current context at the start of any work — latest resume note, open TODOs, recent done in `agent_harness.work_log` (via the SessionStart hook, `script/session_context.sh read`, or an MCP query). Before finishing or handing off, write back: `log`/`done` completed items, `add-todo` new work, `set-resume` a fresh handoff note. The harness work log — not chat scrollback or ad-hoc docs — is the canonical home for work-to-do / done / resume.
 - Always complete all work, or explicitly track what you defer — never leave a surfaced issue in limbo. If something comes up during a task (a review finding, a bug, a missed edge case, dead code, a follow-up) and there is any question of whether to address it now (its severity, scope, or priority), either fix it in the current change or record it before finishing: a work-log todo (`add-todo`) for process/working items, or a bug/issue ticket in the project tracker for code defects. Raising it only in chat does not count as tracking it.
-- Global rule tiers are centrally owned in `harness-infra/rules/` and seeded only by `harness-infra/script/build_global_rules.rb`. The `global` tier applies to every app; the `global-rails`, `global-expo`, and `global-godot` tiers apply to apps of that stack (selected at read time via `HARNESS_STACK`). Never seed or rewrite any `global*` tier from an app seeder — app seeders write only their own `app=<name>` rows and must abort if `HARNESS_APP` starts with `global`. To change a universal or stack rule, edit the canonical file in `harness-infra/rules/` and re-run the central seeder.
+- Global rule tiers are centrally owned in `harness-infra/rules/` and seeded only by `harness-infra/script/build_global_rules.rb`. The `global` tier applies to every app; the `global-rails`, `global-expo`, `global-godot`, and `global-unreal` tiers apply to apps of that stack (selected at read time via `HARNESS_STACK`). Never seed or rewrite any `global*` tier from an app seeder — app seeders write only their own `app=<name>` rows and must abort if `HARNESS_APP` starts with `global`. To change a universal or stack rule, edit the canonical file in `harness-infra/rules/` and re-run the central seeder.
 
 ## Architecture
 
