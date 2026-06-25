@@ -10,6 +10,7 @@
 #   global-rails    Rails-stack universal rules            (rules/global-rails.md)
 #   global-expo     Expo/RN-stack universal rules          (rules/global-expo.md)
 #   global-godot    Godot-stack universal rules            (rules/global-godot.md)
+#   global-unreal   Unreal-Engine-stack universal rules    (rules/global-unreal.md)
 #
 # It also owns the shared `app='global'` invariants (rules/global-invariants.json).
 # App seeders (script/build_harness_db.rb in each app) write ONLY their own
@@ -35,10 +36,11 @@ RULES_DIR = ROOT.join("rules")
 
 # tier => source markdown file
 TIERS = {
-  "global"       => RULES_DIR.join("global-common.md"),
-  "global-rails" => RULES_DIR.join("global-rails.md"),
-  "global-expo"  => RULES_DIR.join("global-expo.md"),
-  "global-godot" => RULES_DIR.join("global-godot.md")
+  "global"        => RULES_DIR.join("global-common.md"),
+  "global-rails"  => RULES_DIR.join("global-rails.md"),
+  "global-expo"   => RULES_DIR.join("global-expo.md"),
+  "global-godot"  => RULES_DIR.join("global-godot.md"),
+  "global-unreal" => RULES_DIR.join("global-unreal.md")
 }.freeze
 
 INVARIANTS_JSON = RULES_DIR.join("global-invariants.json")

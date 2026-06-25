@@ -21,7 +21,7 @@ never insert, delete, or rewrite any `global*` tier — those are owned centrall
 An app seeder must `abort` if `HARNESS_APP` starts with `global`.
 
 Current participants: **rails** = kyra, pamm, postcard · **expo** = cooldown · **godot**
-= riftling, terminal-ai.
+= riftling, terminal-ai · **unreal** = pirates-life.
 
 ## Onboarding a new app — file checklist
 
@@ -49,7 +49,7 @@ cooldown for Expo, kyra_api for Rails). Replace `<app>` and `<stack>` throughout
    `harness-db:5432`), and exports the discriminators:
    ```bash
    export HARNESS_APP="${HARNESS_APP:-<app>}"
-   export HARNESS_STACK="${HARNESS_STACK:-<stack>}"   # rails | expo | godot
+   export HARNESS_STACK="${HARNESS_STACK:-<stack>}"   # rails | expo | godot | unreal
    ```
 
 3. **`script/build_harness_db.rb`** — the app-scoped seeder. It parses
@@ -86,7 +86,7 @@ devcontainer compose so in-container tooling reaches `harness-db:5432`.
 
 ## Registering a new stack
 
-If the app's framework isn't `rails`/`expo`/`godot`:
+If the app's framework isn't `rails`/`expo`/`godot`/`unreal`:
 
 1. Add `harness-infra/rules/global-<stack>.md` (start minimal — a few genuinely
    cross-app rules for that stack).
