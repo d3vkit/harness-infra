@@ -21,6 +21,7 @@ Usage: bin/ci-runner <app> <command> [args]
 
 Commands:
   <app> up [N]     Build base+stack image once, then start N runner pairs (default 1)
+  <app> reset [N]  Down, clear this app's stale GitHub registrations, then up N (clean recovery)
   <app> down       Stop + remove all of <app>'s runner pairs
   <app> status     Show status of <app>'s pairs
   <app> logs [i]   Follow logs for pair i (default 1)
@@ -75,18 +76,57 @@ build_images() {
     -f "$DIR/images/${STACK}/Dockerfile" "$DIR"
 }
 
+# GitHub API via the app's PAT (curl, like entrypoint.sh — no `gh` dependency).
+gh_api() {
+  curl -sSL -H "Authorization: Bearer ${GITHUB_PAT}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" "$@"
+}
+
+# Delete this app's runner registrations (name "<prefix>-N") from the repo — clears
+# the stale/conflicting sessions a restart or cutover leaves behind.
+delete_app_runners() {
+  local ids id
+  ids="$(gh_api "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runners?per_page=100" \
+    | jq -r --arg p "$prefix" '.runners[]? | select(.name | startswith($p + "-")) | .id')"
+  for id in $ids; do
+    gh_api -X DELETE "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runners/${id}" >/dev/null 2>&1 \
+      && echo "  cleared registration ${id}"
+  done
+}
+
+# Build the image once, then start N pairs with unique runner names.
+start_pairs() {
+  local n="$1" i
+  build_images
+  echo "🚀 ${app}: starting $n runner pair(s) [${prefix}-1..$n] → ${REPO_OWNER}/${REPO_NAME} [${RUNNER_LABELS}]"
+  for i in $(seq 1 "$n"); do
+    export RUNNER_NAME="${prefix}-${i}"
+    compose_p "${project_base}-${i}" up -d
+  done
+}
+
 case "$cmd" in
   up)
     : "${GITHUB_PAT:?Set GITHUB_PAT in apps/${app}.secret.env or the environment}"
     N="${3:-${CI_RUNNER_REPLICAS:-1}}"
     if ! [[ "$N" =~ ^[0-9]+$ ]] || [ "$N" -lt 1 ]; then echo "up <N>: N must be a positive integer" >&2; exit 2; fi
-    build_images
-    echo "🚀 ${app}: starting $N runner pair(s) [${prefix}-1..$N] → ${REPO_OWNER}/${REPO_NAME} [${RUNNER_LABELS}]"
-    for i in $(seq 1 "$N"); do
-      export RUNNER_NAME="${prefix}-${i}"
-      compose_p "${project_base}-${i}" up -d
-    done
+    start_pairs "$N"
     echo "ℹ️  Each pair runs its own dind + the job's containers — size N to Docker Desktop RAM."
+    ;;
+  reset)
+    # Clean recovery after restart/cutover churn: stop pairs, clear stale GitHub
+    # registrations (same-name sessions conflict otherwise), then start fresh.
+    : "${GITHUB_PAT:?Set GITHUB_PAT in apps/${app}.secret.env or the environment}"
+    N="${3:-${CI_RUNNER_REPLICAS:-1}}"
+    if ! [[ "$N" =~ ^[0-9]+$ ]] || [ "$N" -lt 1 ]; then echo "reset <N>: N must be a positive integer" >&2; exit 2; fi
+    echo "🔻 Resetting ${app} runners (down → clear registrations → up $N)…"
+    for p in $(list_projects); do echo "🛑 $p"; compose_p "$p" down; done
+    echo "🧹 Clearing GitHub registrations for ${prefix}-* on ${REPO_OWNER}/${REPO_NAME}…"
+    delete_app_runners
+    sleep 15   # let server-side runner sessions clear before re-registering the same names
+    start_pairs "$N"
+    echo "✅ ${app}: reset to $N fresh pair(s)."
     ;;
   down)
     projs="$(list_projects)"; [ -z "$projs" ] && { echo "No ${app} runner pairs running."; exit 0; }

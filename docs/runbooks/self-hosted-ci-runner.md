@@ -29,7 +29,11 @@ cd ci-runner
 cp apps/secret.env.example apps/<app>.secret.env   # set GITHUB_PAT (Administration: r/w on the repo)
 bin/ci-runner <app> up 2                            # 2 parallel pairs
 bin/ci-runner <app> status | logs [i] | down
+bin/ci-runner <app> reset 2                         # clean recovery: down → clear registrations → up
 ```
+
+`reset` recovers runners stuck after a restart/cutover (same-name GitHub
+"session already exists" conflicts): it clears the app's registrations and re-registers fresh.
 
 Confirm on GitHub → app repo → Settings → Actions → Runners (Idle). Keep the runners
 up while you expect PRs (ephemeral — jobs queue/fail if all are down); before marking
