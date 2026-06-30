@@ -65,7 +65,7 @@ project_base="${app}-runner"
 compose_p() { local p="$1"; shift; docker compose -p "$p" -f "$COMPOSE" "$@"; }
 list_projects() {
   docker ps -a --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null \
-    | grep -E "^${project_base}(-[0-9]+)?$" | sort -u
+    | grep -E "^${project_base}(-[0-9]+)?$" | sort -u || true   # empty match: not fatal under set -e/pipefail
 }
 
 build_images() {
