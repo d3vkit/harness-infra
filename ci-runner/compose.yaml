@@ -48,6 +48,12 @@ services:
       RUNNER_NAME: ${RUNNER_NAME:?set RUNNER_NAME}
       RUNNER_LABELS: ${RUNNER_LABELS:?set RUNNER_LABELS}
     restart: unless-stopped     # ephemeral runner exits after each job; restart re-registers
+    volumes:
+      # Persistent per-pair gem cache. Inert unless the app's ci.yml points BUNDLE_PATH
+      # here (kyra does); a warm bundle then makes `bundle install` a fast incremental
+      # no-op across ephemeral jobs instead of a network cache round-trip every run.
+      - bundle-cache:/home/runner/.bundle-cache
 
 volumes:
   dind-storage:
+  bundle-cache:
