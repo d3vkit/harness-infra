@@ -26,4 +26,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
+# Bake Ruby into the toolcache so ruby/setup-ruby finds it pre-installed and skips its
+# per-run download. The ruby-builder tarball nests an `arm64/` dir, so extracting into
+# the version dir yields .../Ruby/<version>/arm64/ + the `<arch>.complete` marker
+# setup-ruby looks for. Self-correcting: a .ruby-version that doesn't match this baked
+# version just falls back to setup-ruby's normal download (kyra/pamm/postcard are 3.4.1).
+ARG RUBY_VERSION=3.4.1
+RUN mkdir -p "/opt/hostedtoolcache/Ruby/${RUBY_VERSION}" \
+    && curl -fsSL "https://github.com/ruby/ruby-builder/releases/download/toolcache/ruby-${RUBY_VERSION}-ubuntu-24.04-arm64.tar.gz" \
+       | tar -xz -C "/opt/hostedtoolcache/Ruby/${RUBY_VERSION}" \
+    && touch "/opt/hostedtoolcache/Ruby/${RUBY_VERSION}/arm64.complete" \
+    && chown -R runner:runner /opt/hostedtoolcache/Ruby
+
 USER runner
