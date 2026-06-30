@@ -62,7 +62,12 @@ Idle). Manage with:
 ```bash
 bin/ci-runner kyra status | logs [i] | down
 bin/ci-runner kyra up 3        # scale (size N to RAM; each pair carries its own dind + job containers)
+bin/ci-runner kyra reset 2     # clean recovery: down → clear stale GitHub registrations → up
 ```
+
+Use **`reset`** if runners get stuck after a restart/cutover (containers up but
+unregistered, or jobs failing mid-run): reusing the same runner names triggers GitHub
+"session already exists" conflicts, and `reset` clears them and re-registers fresh.
 
 The app's `ci.yml` jobs must target the app's labels, e.g.
 `runs-on: [self-hosted, linux, kyra]`.
