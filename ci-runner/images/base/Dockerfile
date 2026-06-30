@@ -6,8 +6,10 @@
 #   docker build -t harness-runner:base -f images/base/Dockerfile .
 FROM ubuntu:24.04
 
-# Pin the runner version; bump deliberately.
-ARG RUNNER_VERSION=2.328.0
+# Pin the runner version; bump deliberately to the current actions/runner release so
+# fresh runners don't immediately auto-update on their first job (the partial-update
+# churn can crash-loop a freshly-registered runner). Refresh as new versions ship.
+ARG RUNNER_VERSION=2.335.1
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Runner-essential, stack-agnostic deps:
