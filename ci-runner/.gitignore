@@ -1,0 +1,2 @@
+# Per-app PATs — never commit. Only apps/*.env and apps/secret.env.example are tracked.
+apps/*.secret.env

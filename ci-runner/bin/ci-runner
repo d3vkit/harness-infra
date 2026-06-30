@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Self-hosted GitHub Actions runners for harness apps. Builds a per-stack image once
+# (base → stack), then runs N parallel runner+dind pairs registered to an app's repo.
+#
+#   bin/ci-runner <app> up [N]      # build + start N pairs (default 1, or $CI_RUNNER_REPLICAS)
+#   bin/ci-runner <app> down        # stop + remove all of <app>'s pairs
+#   bin/ci-runner <app> status      # status of <app>'s pairs
+#   bin/ci-runner <app> logs [i]    # follow logs for pair i (default 1)
+#
+# <app> resolves apps/<app>.env (REPO_OWNER, REPO_NAME, STACK, RUNNER_LABELS,
+# RUNNER_NAME). The PAT comes from apps/<app>.secret.env (gitignored) or $GITHUB_PAT.
+# See ci-runner/README.md and docs/runbooks/self-hosted-ci-runner.md.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")/.." && pwd)"   # ci-runner/
+COMPOSE="$DIR/compose.yaml"
+
+usage() {
+  cat <<'USAGE'
+Usage: bin/ci-runner <app> <command> [args]
+
+Commands:
+  <app> up [N]     Build base+stack image once, then start N runner pairs (default 1)
+  <app> down       Stop + remove all of <app>'s runner pairs
+  <app> status     Show status of <app>'s pairs
+  <app> logs [i]   Follow logs for pair i (default 1)
+  help             Show this help
+
+<app> is the basename of a file in apps/ (e.g. `kyra` → apps/kyra.env). Size N to
+Docker Desktop RAM (each pair carries its own dind + the job's containers).
+
+First run for an app:
+  cp apps/secret.env.example apps/<app>.secret.env   # set GITHUB_PAT
+  bin/ci-runner <app> up 2
+USAGE
+}
+
+app="${1:-help}"
+case "$app" in help|-h|--help) usage; exit 0 ;; esac
+cmd="${2:-status}"
+
+APP_ENV="$DIR/apps/${app}.env"
+if [ ! -f "$APP_ENV" ]; then
+  echo "❌ No config for '${app}': missing $APP_ENV" >&2
+  echo "   Available: $(cd "$DIR/apps" && ls ./*.env 2>/dev/null | sed 's#.*/##; s/\.env$//' | tr '\n' ' ')" >&2
+  exit 1
+fi
+
+# Load app config (+ its gitignored secret, if present), exporting for compose/build.
+set -a
+# shellcheck disable=SC1090
+. "$APP_ENV"
+[ -f "$DIR/apps/${app}.secret.env" ] && . "$DIR/apps/${app}.secret.env"
+set +a
+
+: "${REPO_OWNER:?apps/${app}.env must set REPO_OWNER}"
+: "${REPO_NAME:?apps/${app}.env must set REPO_NAME}"
+: "${STACK:?apps/${app}.env must set STACK (rails|expo|godot)}"
+: "${RUNNER_LABELS:?apps/${app}.env must set RUNNER_LABELS}"
+prefix="${RUNNER_NAME:-${app}-runner}"
+export RUNNER_NAME="$prefix"            # default for down/status; overridden per-pair on up
+export RUNNER_IMAGE="harness-runner:${STACK}"
+
+project_base="${app}-runner"
+compose_p() { local p="$1"; shift; docker compose -p "$p" -f "$COMPOSE" "$@"; }
+list_projects() {
+  docker ps -a --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null \
+    | grep -E "^${project_base}(-[0-9]+)?$" | sort -u
+}
+
+build_images() {
+  echo "🔧 Building harness-runner:base + ${RUNNER_IMAGE}…"
+  docker build -t harness-runner:base -f "$DIR/images/base/Dockerfile" "$DIR"
+  docker build -t "$RUNNER_IMAGE" --build-arg BASE_IMAGE=harness-runner:base \
+    -f "$DIR/images/${STACK}/Dockerfile" "$DIR"
+}
+
+case "$cmd" in
+  up)
+    : "${GITHUB_PAT:?Set GITHUB_PAT in apps/${app}.secret.env or the environment}"
+    N="${3:-${CI_RUNNER_REPLICAS:-1}}"
+    if ! [[ "$N" =~ ^[0-9]+$ ]] || [ "$N" -lt 1 ]; then echo "up <N>: N must be a positive integer" >&2; exit 2; fi
+    build_images
+    echo "🚀 ${app}: starting $N runner pair(s) [${prefix}-1..$N] → ${REPO_OWNER}/${REPO_NAME} [${RUNNER_LABELS}]"
+    for i in $(seq 1 "$N"); do
+      export RUNNER_NAME="${prefix}-${i}"
+      compose_p "${project_base}-${i}" up -d
+    done
+    echo "ℹ️  Each pair runs its own dind + the job's containers — size N to Docker Desktop RAM."
+    ;;
+  down)
+    projs="$(list_projects)"; [ -z "$projs" ] && { echo "No ${app} runner pairs running."; exit 0; }
+    for p in $projs; do echo "🛑 $p"; compose_p "$p" down; done
+    ;;
+  status|ps)
+    projs="$(list_projects)"; [ -z "$projs" ] && { echo "No ${app} runner pairs running."; exit 0; }
+    for p in $projs; do echo "── $p ──"; compose_p "$p" ps; done
+    ;;
+  logs)
+    compose_p "${project_base}-${3:-1}" logs -f runner
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2; usage >&2; exit 2 ;;
+esac
