@@ -1,0 +1,53 @@
+# Parameterized self-hosted runner pair, shared by every harness app.
+#
+#   dind    — a nested Docker daemon. The job's `services:` containers, any
+#             `docker`/compose steps, etc. run here.
+#   runner  — the Actions runner agent. It SHARES dind's network namespace
+#             (network_mode: service:dind), so service ports published by dind are
+#             reachable at localhost:<port> inside the runner — identical to a hosted
+#             ubuntu-latest runner, so the app's ci.yml needs no changes.
+#
+# All app/stack specifics come from the environment (set by bin/ci-runner):
+#   RUNNER_IMAGE   the per-stack image, e.g. harness-runner:rails
+#   REPO_OWNER     GitHub repo owner   (e.g. d3vkit)
+#   REPO_NAME      GitHub repo name    (e.g. kyra_api)
+#   RUNNER_NAME    unique runner name  (e.g. kyra-mac-runner-1)
+#   RUNNER_LABELS  e.g. self-hosted,linux,kyra
+#   GITHUB_PAT     fine-grained PAT (Administration: read/write on the repo)
+#
+# Run N pairs in parallel: bin/ci-runner <app> up N  (one Compose project per pair).
+name: harness-ci-runner
+
+services:
+  dind:
+    image: docker:27-dind
+    privileged: true            # required for a nested Docker daemon
+    environment:
+      DOCKER_TLS_CERTDIR: ""    # serve plain tcp://0.0.0.0:2375 (never published off-box)
+    volumes:
+      - dind-storage:/var/lib/docker
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  runner:
+    image: ${RUNNER_IMAGE:?set RUNNER_IMAGE, e.g. harness-runner:rails (bin/ci-runner builds it)}
+    init: true                  # reap zombie processes from job steps
+    depends_on:
+      dind:
+        condition: service_healthy
+    network_mode: "service:dind" # share dind's netns → services on localhost
+    environment:
+      DOCKER_HOST: tcp://localhost:2375
+      GITHUB_PAT: ${GITHUB_PAT:-}  # required at run time (entrypoint validates); not needed for down/status
+      REPO_OWNER: ${REPO_OWNER:?set REPO_OWNER}
+      REPO_NAME: ${REPO_NAME:?set REPO_NAME}
+      RUNNER_NAME: ${RUNNER_NAME:?set RUNNER_NAME}
+      RUNNER_LABELS: ${RUNNER_LABELS:?set RUNNER_LABELS}
+    restart: unless-stopped     # ephemeral runner exits after each job; restart re-registers
+
+volumes:
+  dind-storage:
