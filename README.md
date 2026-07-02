@@ -75,6 +75,41 @@ the seeder — no per-app mirroring. (This replaces the former byte-identical-ac
 scheme guarded by `global_rules.sha256` / `check_global_rules_sync.sh`, now retired.)
 App seeders must never write a `global*` tier.
 
+## Shared maintenance scripts
+
+Scripts that operate on **shared, workspace-wide** resources live here (not in any
+one app) so there is a single copy:
+
+- **`script/build_global_rules.rb`** — sole writer of the `global*` rule tiers (see above).
+- **`script/archive_done_linear_tickets.rb`** — archives Done (completed) Linear tickets
+  to keep the shared board under Linear's ticket limit. The limit is **workspace-wide
+  across every team** (VentroEdit, Whatchapizza, …), so this lives here rather than in a
+  single app hardcoded to its own team. By default it scans every team; scope it with
+  `--team KEY` and/or `--project NAME|ID`. Run it from the host — it needs only Ruby +
+  internet + `LINEAR_API_KEY` (it hits the Linear API, not the harness DB).
+
+  It resolves `LINEAR_API_KEY` from the environment, or from your login shell rc (e.g.
+  `~/.zshrc`) when the key isn't already exported. That fallback matters for **agents**:
+  their non-interactive shells don't source `~/.zshrc`, so a key exported only there is
+  otherwise invisible — this lets an agent run the archiver without a manual export.
+
+  ```bash
+  # preview across all teams (key read from ~/.zshrc if not exported)
+  ruby script/archive_done_linear_tickets.rb --dry-run
+  # or pass it explicitly
+  LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --dry-run
+  # archive everything Done in one team / one project
+  ruby script/archive_done_linear_tickets.rb --team WHA --all
+  ruby script/archive_done_linear_tickets.rb --project "Live Transcription" --all
+  ```
+
+  See `--help` for all flags (`--threshold`, `--keep`, …).
+
+  **Agents know about this.** The shared `global` rule tier (`rules/global-common.md`,
+  seeded into every participant's harness) tells agents that when the Linear workspace
+  nears its ticket limit they can reclaim space by archiving Done tickets with this one
+  shared script — rather than forking a per-app copy or leaving the board wedged.
+
 ## Data
 
 The `agent_harness` schema is created/seeded by each app's `build_harness_db.rb`
