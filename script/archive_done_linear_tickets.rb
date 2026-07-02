@@ -21,8 +21,15 @@
 #   --dry-run          print what would be archived; make no changes
 #   -h, --help         show this help
 #
+# Auth:
+#   Reads LINEAR_API_KEY from the environment. If it isn't exported there (the
+#   common case for agents, whose non-interactive shells don't source ~/.zshrc),
+#   it falls back to asking your login shell for it — so a key exported in an
+#   interactive rc like ~/.zshrc is picked up without a manual export.
+#
 # Usage:
 #   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --dry-run
+#   ruby script/archive_done_linear_tickets.rb --dry-run   # key read from ~/.zshrc
 #   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb            # all teams, crowded ones only
 #   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --team WHA --all
 #   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --project "Live Transcription" --all
@@ -43,7 +50,9 @@ USAGE = <<~TXT
     --dry-run          print what would be archived; make no changes
     -h, --help         show this help
 
-  LINEAR_API_KEY must be set. Example:
+  LINEAR_API_KEY must be resolvable: exported in the environment, or exported in
+  your login shell rc (e.g. ~/.zshrc) — the script reads it from there when it is
+  not already in the environment. Example:
     LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --project "Live Transcription" --all --dry-run
 TXT
 UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
@@ -81,6 +90,57 @@ def parse_args(argv)
     i += 1
   end
   opts
+end
+
+# Resolve LINEAR_API_KEY. Prefer the environment; if it's absent there, ask the
+# user's login shell for it. Agents shell out through non-interactive shells that
+# don't source interactive rc files (~/.zshrc, ~/.bashrc), so a key exported only
+# there is invisible to ENV — this fallback surfaces it without a manual export.
+def resolve_api_key
+  env = ENV["LINEAR_API_KEY"]
+  return env unless env.nil? || env.strip.empty?
+
+  shell = ENV["SHELL"]
+  return nil unless shell && File.executable?(shell)
+
+  key = key_from_login_shell(shell)
+  return nil if key.nil? || key.empty?
+
+  # A Linear API key contains no whitespace. If the login shell's rc still leaked
+  # output around the value, refuse it instead of handing a poisoned string to
+  # Net::HTTP (a CR/LF in the Authorization header raises) — fall through to the
+  # clean "not found" abort rather than crash.
+  if key.match?(/\s/)
+    warn "[warn] ignoring LINEAR_API_KEY from login shell: value looks malformed (contains whitespace)."
+    return nil
+  end
+
+  warn "[info] LINEAR_API_KEY not in environment; loaded it from your login shell (#{shell})."
+  key
+end
+
+# Ask an interactive login shell to print $LINEAR_API_KEY on a dedicated fd (3),
+# with the shell's own stdout and stderr discarded. Routing the value through fd 3
+# rather than stdout keeps rc banner/prompt output (Powerlevel10k, nvm/rbenv
+# greetings, an MOTD, a bare `echo`) from being captured as part of the key. stdin
+# is /dev/null so an rc that reads input can never block. -l/-i source the login
+# and interactive rc files (~/.zprofile, ~/.zshrc / ~/.bashrc) where the key lives.
+def key_from_login_shell(shell)
+  reader, writer = IO.pipe
+  pid = Process.spawn(
+    shell, "-lic", 'printf %s "$LINEAR_API_KEY" >&3',
+    3 => writer, in: File::NULL, out: File::NULL, err: File::NULL
+  )
+  writer.close
+  key = reader.read
+  Process.wait(pid)
+  key.to_s.strip
+rescue SystemCallError => e
+  warn "[warn] could not query #{shell} for LINEAR_API_KEY: #{e.message}"
+  nil
+ensure
+  reader&.close
+  writer&.close
 end
 
 def graphql(api_key, query, variables = {})
@@ -151,7 +211,12 @@ GQL
 ARCHIVE_MUTATION = "mutation($id: String!) { issueArchive(id: $id) { success } }"
 
 opts = parse_args(ARGV)
-api_key = ENV["LINEAR_API_KEY"] or abort("ERROR: LINEAR_API_KEY env var required")
+api_key = resolve_api_key or abort(<<~MSG)
+  ERROR: LINEAR_API_KEY not found.
+  Set it in the environment (export LINEAR_API_KEY=lin_api_...) or export it in your
+  login shell rc (e.g. ~/.zshrc) so the script can read it. Create a key at
+  https://linear.app/settings/api
+MSG
 
 puts "[dry-run] no changes will be made" if opts[:dry_run]
 
