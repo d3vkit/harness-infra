@@ -70,6 +70,13 @@ list_projects() {
 }
 
 build_images() {
+  # Escape hatch: reuse the existing ${RUNNER_IMAGE} without rebuilding. Lets you
+  # recover/start runners when the base rebuild can't reach the registry (flaky NAT
+  # on `FROM ubuntu:…`) while the prior image is still valid.
+  if [ "${SKIP_IMAGE_BUILD:-0}" = "1" ]; then
+    echo "⏭️  SKIP_IMAGE_BUILD=1 — reusing existing ${RUNNER_IMAGE} (no rebuild)."
+    return 0
+  fi
   echo "🔧 Building harness-runner:base + ${RUNNER_IMAGE}…"
   docker build -t harness-runner:base -f "$DIR/images/base/Dockerfile" "$DIR"
   docker build -t "$RUNNER_IMAGE" --build-arg BASE_IMAGE=harness-runner:base \

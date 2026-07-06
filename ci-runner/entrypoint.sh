@@ -43,8 +43,14 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-# dind state persists in its volume across jobs; keep it from accumulating.
+# dind state persists in its volume across jobs; keep it from accumulating. Runs each
+# cycle because the runner is ephemeral (one job → exit → Compose restart → re-register).
 docker system prune -f >/dev/null 2>&1 || true
+# `docker system prune` does NOT touch volumes, so anonymous service volumes (Postgres
+# PGDATA, Supabase, redis) left by GitHub Actions `services:` accumulate every cycle and
+# eventually fill the shared dind disk (→ CI PG::DiskFull). Drop unused anonymous volumes
+# too. Anonymous-only (no -a): named volumes are never removed.
+docker volume prune -f >/dev/null 2>&1 || true
 
 echo "🔑 Minting a runner registration token for ${REPO_OWNER}/${REPO_NAME}…"
 if ! REG_TOKEN="$(mint_runner_token registration-token)" || [ -z "$REG_TOKEN" ]; then
