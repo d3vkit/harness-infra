@@ -78,7 +78,8 @@ if ! ./config.sh --unattended \
   --labels "$RUNNER_LABELS" \
   --ephemeral \
   --replace \
-  --work _work; then
+  --work _work \
+  --disableupdate; then
   echo "❌ Runner configuration failed; backing off 30s before exit." >&2
   sleep 30
   exit 1
