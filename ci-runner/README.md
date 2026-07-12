@@ -48,6 +48,32 @@ ci-runner/
 - A **fine-grained GitHub PAT** per app, scoped to that app's repo with
   **Administration: Read and write** (to mint runner registration tokens).
 
+## Sizing & resource limits
+
+Every pair (runner + dind) runs in the **one shared Docker Desktop VM**, so max concurrent
+jobs across all apps == total registered pairs — there is no cross-app semaphore. On an
+**8-CPU / 16 GB VM** the supported ceiling is **~3 concurrent Rails pairs**; beyond that the
+VM swaps and starved runner agents miss their GitHub heartbeat, which surfaces as
+**"The self-hosted runner lost communication with the server"** (a job-level failure that
+spares light jobs and strikes heavy Ruby/Node steps). Keep each Rails app at **1 pair** until
+the VM is enlarged (Docker Desktop → Settings → Resources → Memory).
+
+Each pair is capped so one job can't swamp the VM — a cgroup hard limit turns a VM-wide
+swap-stall (which fails *every* runner at once) into a localized OOM of just the over-budget
+job. Defaults are Rails-sized; override per app in `apps/<app>.env`:
+
+| var           | default | caps                                    |
+|---------------|---------|-----------------------------------------|
+| `RUNNER_MEM`  | `3g`    | runner memory (rspec + Chromium)        |
+| `DIND_MEM`    | `2g`    | dind memory (job `services:` + builds)  |
+| `RUNNER_CPUS` | `2.5`   | runner CPUs                             |
+| `DIND_CPUS`   | `1.5`   | dind CPUs                               |
+
+Expo/godot pairs set lighter values (`RUNNER_MEM=2g`, `DIND_MEM=1g`, `*_CPUS` 1.5/1) in their
+env. `CI_RUNNER_REPLICAS` in `apps/<app>.env` sets the default pair count for `up`/`reset`
+(kyra is pinned to `1`). Changing any limit takes effect on the next `bin/ci-runner <app> up`
+(recreates the pairs).
+
 ## Run runners for an app
 
 ```bash
