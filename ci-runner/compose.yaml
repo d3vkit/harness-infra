@@ -33,10 +33,13 @@ services:
       retries: 30
     restart: unless-stopped
     # Per-pair resource ceilings (see ci-runner/README.md → Sizing): bound each nested
-    # Docker daemon so N concurrent pairs can't oversubscribe the shared Docker VM and
-    # starve every runner agent past its GitHub heartbeat → "lost communication". Rails-
-    # sized defaults; lighter stacks (expo/godot) override these via apps/<app>.env.
-    mem_limit: ${DIND_MEM:-2g}
+    # Docker daemon so one runaway job can't consume the whole shared Docker VM and starve
+    # co-tenant runner agents past their GitHub heartbeat → "lost communication". Rails-sized
+    # defaults, generous enough not to clip a real job (dind hosts the job's `services:` —
+    # for kyra that's the ~10-container supabase-parity stack); lighter stacks (expo/godot)
+    # override via apps/<app>.env. These bound a single pair; they do NOT let two heavy pairs
+    # share a 16 GB VM — for real concurrency, raise the VM's RAM or keep 1 pair per app.
+    mem_limit: ${DIND_MEM:-5g}
     cpus: ${DIND_CPUS:-1.5}
 
   runner:
@@ -54,8 +57,8 @@ services:
       RUNNER_NAME: ${RUNNER_NAME:?set RUNNER_NAME}
       RUNNER_LABELS: ${RUNNER_LABELS:?set RUNNER_LABELS}
     restart: unless-stopped     # ephemeral runner exits after each job; restart re-registers
-    mem_limit: ${RUNNER_MEM:-3g}  # runs rspec + Chromium system specs; a cgroup ceiling turns a
-    cpus: ${RUNNER_CPUS:-2.5}     # VM-wide swap-stall into a localized OOM of the over-budget job
+    mem_limit: ${RUNNER_MEM:-4g}  # runs rspec + Chromium system specs; a cgroup ceiling stops one
+    cpus: ${RUNNER_CPUS:-2.5}     # leaky/runaway job from swamping the VM and stalling other runners
     volumes:
       # Persistent per-pair gem cache. Inert unless the app's ci.yml points BUNDLE_PATH
       # here (kyra does); a warm bundle then makes `bundle install` a fast incremental

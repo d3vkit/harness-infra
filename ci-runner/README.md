@@ -51,28 +51,42 @@ ci-runner/
 ## Sizing & resource limits
 
 Every pair (runner + dind) runs in the **one shared Docker Desktop VM**, so max concurrent
-jobs across all apps == total registered pairs — there is no cross-app semaphore. On an
-**8-CPU / 16 GB VM** the supported ceiling is **~3 concurrent Rails pairs**; beyond that the
-VM swaps and starved runner agents miss their GitHub heartbeat, which surfaces as
-**"The self-hosted runner lost communication with the server"** (a job-level failure that
-spares light jobs and strikes heavy Ruby/Node steps). Keep each Rails app at **1 pair** until
-the VM is enlarged (Docker Desktop → Settings → Resources → Memory).
+jobs across all apps == total registered pairs — there is no cross-app semaphore. That VM also
+hosts the always-on containers (harness-db, each app's dev stack, agent workloads), which
+already consume several GB. On an **8-CPU / 16 GB VM** the realistic safe steady state is
+**one heavy Rails CI job at a time**; two concurrent heavy Rails pairs (e.g. a postcard and a
+pamm job at once) oversubscribe the VM, it swaps, and starved runner agents miss their GitHub
+heartbeat — surfacing as **"The self-hosted runner lost communication with the server"** (a
+job-level failure that spares light jobs and strikes heavy Ruby/Node steps). Keep each Rails
+app at **1 pair**, and for reliable concurrency raise the VM to **≥ 24 GB** (Docker Desktop →
+Settings → Resources → Memory; only if the Mac has ≥ 32 GB physical).
 
-Each pair is capped so one job can't swamp the VM — a cgroup hard limit turns a VM-wide
-swap-stall (which fails *every* runner at once) into a localized OOM of just the over-budget
-job. Defaults are Rails-sized; override per app in `apps/<app>.env`:
+The per-pair ceilings below bound a **single runaway/leaky job** so it can't consume the whole
+VM and take every co-tenant runner down with it — they are *not* a substitute for enough VM
+RAM to fit the concurrency you run. Defaults are Rails-sized and deliberately generous so they
+don't clip a real job (dind hosts the job's `services:` — for kyra the ~10-container
+supabase-parity stack). Override per app in `apps/<app>.env`; if a real job OOMs, raise that
+app's value rather than lowering the default:
 
 | var           | default | caps                                    |
 |---------------|---------|-----------------------------------------|
-| `RUNNER_MEM`  | `3g`    | runner memory (rspec + Chromium)        |
-| `DIND_MEM`    | `2g`    | dind memory (job `services:` + builds)  |
+| `RUNNER_MEM`  | `4g`    | runner memory (rspec + Chromium)        |
+| `DIND_MEM`    | `5g`    | dind memory (job `services:` + builds)  |
 | `RUNNER_CPUS` | `2.5`   | runner CPUs                             |
 | `DIND_CPUS`   | `1.5`   | dind CPUs                               |
 
 Expo/godot pairs set lighter values (`RUNNER_MEM=2g`, `DIND_MEM=1g`, `*_CPUS` 1.5/1) in their
 env. `CI_RUNNER_REPLICAS` in `apps/<app>.env` sets the default pair count for `up`/`reset`
-(kyra is pinned to `1`). Changing any limit takes effect on the next `bin/ci-runner <app> up`
-(recreates the pairs).
+(kyra is pinned to `1`).
+
+Changing a limit takes effect when the pairs are **recreated**. To apply it — or to scale an
+app **down** (e.g. kyra 2 → 1) — use `bin/ci-runner <app> reset N` (or `down` then `up N`): a
+plain `up N` only starts/refreshes pairs `1..N` and leaves any higher-numbered pair running
+with the old config.
+
+> Runners register with `--disableupdate`, so they never self-update off the version baked in
+> `images/base/Dockerfile` (currently 2.335.1). Bump that pin and rebuild periodically, or
+> GitHub may eventually refuse jobs from a too-old runner.
 
 ## Run runners for an app
 
