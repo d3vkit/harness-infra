@@ -21,8 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # into the workspace instead of fetching them.
 #
 # Versions MUST track ephemeral: ci.yml GODOT_VERSION + justfile webrtc_version / twovoip_version. Bump
-# here in lockstep — a mismatch is not fatal, it just makes ephemeral's ci.yml fall back to a (hardened)
-# runtime download, which is correct but re-exposes the flake. ephemeral is the only ACTIVE godot app.
+# here in LOCKSTEP and rebuild + redeploy this image. Fallback behaviour DIFFERS by artifact:
+#   - Godot: self-correcting — ci.yml's cache-check is version-aware (grep on `godot --version`), so a
+#     mismatch falls back to a hardened runtime download (correct, just re-exposes the flake).
+#   - webrtc / twovoip: NOT self-correcting — ci.yml's Fetch steps gate on directory EXISTENCE, not
+#     version, so a bump that isn't mirrored here makes CI silently reuse the STALE baked extension with
+#     no download fallback. ALWAYS rebuild this image when bumping an extension version. (Version-stamping
+#     the baked dirs so CI can auto-fallback is tracked as a follow-up.)
+# ephemeral is the only ACTIVE godot app (riftling / terminal-ai are stubs).
 ARG GODOT_VERSION=4.6-stable
 ARG WEBRTC_VERSION=1.1.0-stable
 ARG TWOVOIP_VERSION=v4.2
