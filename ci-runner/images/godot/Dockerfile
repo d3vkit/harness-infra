@@ -90,6 +90,9 @@ RUN set -eux; \
     if [ "$GARCH" = "linux.arm64" ]; then \
       cp /tmp/twovoip-arm64/libtwovoip.linux.template_debug.arm64.so   /opt/godot-vendor/twovoip/libs/; \
       cp /tmp/twovoip-arm64/libtwovoip.linux.template_release.arm64.so /opt/godot-vendor/twovoip/libs/; \
+      # The libs statically link twovoip/godot-cpp (MIT) + opus/rnnoise (BSD-3), whose notices must
+      # travel with any binary redistribution — ship them beside the libs, as webrtc-native does.
+      cp /tmp/twovoip-arm64/NOTICE /opt/godot-vendor/twovoip/NOTICE.arm64-libs; \
       printf '\nlinux.arm64 = "libs/libtwovoip.linux.template_debug.arm64.so"\nlinux.template_release.arm64 = "libs/libtwovoip.linux.template_release.arm64.so"\n' \
         >> /opt/godot-vendor/twovoip/twovoip.gdextension; \
     fi; \

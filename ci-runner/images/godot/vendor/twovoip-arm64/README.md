@@ -41,3 +41,20 @@ bin/ci-runner ephemeral reset 1   # ONLY while CI is idle — a reset mid-job zo
 **Pin discipline:** the tag built here MUST match `ephemeral`'s `justfile` `twovoip_version` and the
 `TWOVOIP_VERSION` ARG in the Dockerfile. Bumping twovoip means rebuilding these libs for the new tag
 in the same change. Do NOT bump to v5.0 — it removed the chunked classes the voice pipeline uses.
+
+## Licensing — [`NOTICE`](NOTICE)
+
+This repo is **public**, so committing these binaries is redistribution in binary form. The libs
+statically link **twovoip** + **godot-cpp** (MIT) and **opus** + **rnnoise** (BSD-3); all four
+require their notices accompany binary copies, and upstream's release zip can't supply them (its
+`LICENSE` lives at the twovoip repo root, which the Dockerfile never extracts). [`NOTICE`](NOTICE)
+carries all four verbatim, pinned to the exact commits compiled, and the Dockerfile ships it into
+the image as `/opt/godot-vendor/twovoip/NOTICE.arm64-libs`.
+
+**A version bump must refresh `NOTICE` from the new pinned sources alongside the rebuilt `.so`** —
+attribution tracks the bytes, not the tag.
+
+Worth knowing: rnnoise comes from the `noise-suppression-for-voice` submodule whose **root LICENSE
+is GPL-3.0**. That covers werman's JUCE plugin product, which is **not** built or linked here —
+twovoip cmake-builds only the vendored `external/rnnoise` subdirectory (BSD-3). Verified against
+the shipped `.so`: zero JUCE symbols, zero GPL references. Re-check this if you bump the tag.
