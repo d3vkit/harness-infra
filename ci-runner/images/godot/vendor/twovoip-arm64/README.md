@@ -45,14 +45,17 @@ in the same change. Do NOT bump to v5.0 — it removed the chunked classes the v
 ## Licensing — [`NOTICE`](NOTICE)
 
 This repo is **public**, so committing these binaries is redistribution in binary form. The libs
-statically link **twovoip** + **godot-cpp** (MIT) and **opus** + **rnnoise** (BSD-3); all four
-require their notices accompany binary copies, and upstream's release zip can't supply them (its
-`LICENSE` lives at the twovoip repo root, which the Dockerfile never extracts). [`NOTICE`](NOTICE)
-carries all four verbatim, pinned to the exact commits compiled, and the Dockerfile ships it into
-the image as `/opt/godot-vendor/twovoip/NOTICE.arm64-libs`.
+statically link **twovoip** + **godot-cpp** (MIT) and **opus** + **rnnoise** + **speex_resampler**
+(BSD-3); all five require their notices accompany binary copies, and upstream's release zip can't
+supply them (its `LICENSE` lives at the twovoip repo root, which the Dockerfile never extracts).
+[`NOTICE`](NOTICE) carries all five verbatim, pinned to the exact sources compiled, and the
+Dockerfile ships it into the image as `/opt/godot-vendor/twovoip/NOTICE.arm64-libs`.
 
 **A version bump must refresh `NOTICE` from the new pinned sources alongside the rebuilt `.so`** —
-attribution tracks the bytes, not the tag.
+attribution tracks the bytes, not the tag. **Enumerate components from what the binary links, not
+from `.gitmodules`:** v4.2 declares only three submodules, so a submodule-derived list misses
+`speex_resampler`, which is vendored source in twovoip's *own* `src/` tree. That is exactly the
+trap this NOTICE was first written with (caught in review) — see the notes in `NOTICE` itself.
 
 Worth knowing: rnnoise comes from the `noise-suppression-for-voice` submodule whose **root LICENSE
 is GPL-3.0**. That covers werman's JUCE plugin product, which is **not** built or linked here —
