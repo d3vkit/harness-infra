@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Every check here must be able to FAIL. This repo has a documented history of failure being
+# aliased to success (VEN-1310: gh_api swallowed HTTP errors; reset reported success when it
+# cleared nothing), and the harness auto-merge gate reads "CI is green on GitHub" as a fact to
+# verify. A check that cannot go red would make that verification a lie, so never add a step
+# here that reports green without asserting something.
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Ruby syntax
+        run: |
+          set -euo pipefail
+          find script -name '*.rb' -print0 | xargs -0 -n1 ruby -c
+
+      - name: Shell syntax
+        run: |
+          set -euo pipefail
+          bash -n ci-runner/entrypoint.sh
+          bash -n ci-runner/bin/ci-runner
+
+      - name: Shellcheck
+        # Pinned image rather than apt's shellcheck: the version is then identical to the one this
+        # was verified against locally, so a runner-image bump cannot turn the gate red on its own.
+        # -S warning: style nits in a working script are not worth a red gate; real bugs are.
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.9.0 \
+            -S warning ci-runner/entrypoint.sh ci-runner/bin/ci-runner
+
+      - name: Compose files are valid
+        # ci-runner/compose.yaml declares five ${VAR:?} interpolations that bin/ci-runner exports
+        # at runtime, so a bare `config -q` can never pass. Placeholders let compose validate the
+        # file's structure and interpolation, which is what is being checked here — they are not
+        # a real runner configuration and nothing is started.
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml config -q
+          RUNNER_IMAGE=placeholder:ci \
+          REPO_OWNER=placeholder \
+          REPO_NAME=placeholder \
+          RUNNER_LABELS=placeholder \
+          RUNNER_NAME=placeholder \
+            docker compose -f ci-runner/compose.yaml config -q
+
+  rules:
+    name: rule sources + seeder round-trip
+    runs-on: ubuntu-latest
+
+    # The seeder is the SOLE writer of the global* rule tiers for every participating app, and it
+    # has no unit tests. Running it end-to-end against a throwaway Postgres is the only thing that
+    # actually proves a rules/*.md edit lands as the rows agents read.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install pg gem and client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpq-dev postgresql-client
+          gem install pg --no-document
+
+      - name: Rule sources parse cleanly
+        # No DB needed. Catches a rule silently truncated or dropped by the seeder's parser.
+        run: ruby script/verify_global_rules.rb
+
+      - name: Canonical schema applies to a clean postgres:16
+        # Proves db/harness_schema.sql is restorable — this repo owns the shared harness DB, so
+        # this file is the disaster-recovery path. ON_ERROR_STOP makes a bad DDL line fail here.
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f db/harness_schema.sql
+          psql -c "SELECT count(*) AS tables FROM information_schema.tables WHERE table_schema='agent_harness';"
+
+      - name: Seeder round-trip and idempotency
+        # Seeds for real, reads the rows back, asserts counts match the parsed sources, then seeds
+        # again and asserts nothing duplicated (rebuild_rules! is DELETE + INSERT with no
+        # transaction wrapper).
+        run: ruby script/verify_global_rules.rb --round-trip
