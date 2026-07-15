@@ -57,13 +57,9 @@ services:
       RUNNER_NAME: ${RUNNER_NAME:?set RUNNER_NAME}
       RUNNER_LABELS: ${RUNNER_LABELS:?set RUNNER_LABELS}
     # Ephemeral runner exits after each job; the restart is what re-registers it. `always`
-    # rather than `unless-stopped`, because quitting Docker Desktop from the menu stops
-    # containers *gracefully* — which sets HasBeenManuallyStopped, and `unless-stopped` is
-    # defined by never restarting those again. That silently parked the whole fleet for
-    # hours on 2026-07-14: no runner registered, so every job just queued. An *ungraceful*
-    # VM stop doesn't set the flag and recovers fine, which is why it read as intermittent.
-    # `bin/ci-runner <app> down` removes the containers outright, so pausing a pair is
-    # unaffected by this. (VEN-1306)
+    # rather than `unless-stopped` so a pair that was stopped by hand still returns once the
+    # daemon is back — nobody should have to remember to restart CI. `bin/ci-runner <app> down`
+    # removes the containers outright, so pausing a pair is unaffected by this. (VEN-1306)
     restart: always
     mem_limit: ${RUNNER_MEM:-4g}  # runs rspec + Chromium system specs; a cgroup ceiling stops one
     cpus: ${RUNNER_CPUS:-2.5}     # leaky/runaway job from swamping the VM and stalling other runners

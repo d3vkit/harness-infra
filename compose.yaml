@@ -33,10 +33,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    # `always`, not `unless-stopped`: quitting Docker Desktop from the menu stops
-    # containers gracefully, which sets HasBeenManuallyStopped — and `unless-stopped`
-    # is defined by never restarting those again. Every agent session across every app
-    # reads its rules from here, so the DB must come back on its own. (VEN-1306)
+    # `always`, not `unless-stopped`, so a DB that was stopped by hand still returns once
+    # the daemon is back. Every agent session across every app reads its rule tiers from
+    # here and the SessionStart hooks fail open, so a DB that stays down is invisible —
+    # it must not depend on someone remembering to start it. (VEN-1306)
     restart: always
 
 volumes:
