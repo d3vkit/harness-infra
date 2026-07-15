@@ -26,19 +26,24 @@ REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}"
 # that advice rotates a working token and is no closer. A wrong cause costs more than no
 # cause, because it forecloses the right one.
 mint_runner_token() {
-  local endpoint="$1" resp rc code body
+  local endpoint="$1" resp rc code body curl_msg
   resp="$(curl -sSL -w $'\n%{http_code}' -X POST \
     -H "Authorization: Bearer ${GITHUB_PAT}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "${API}/actions/runners/${endpoint}" 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
-    # curl itself failed: nothing was received, so this is transport — never credentials.
-    # `resp` holds curl's own stderr (that's what -sS is for); print it instead of guessing.
+    # curl itself failed, so no response was received and the credentials were never judged.
+    # Whatever this is, it is not the PAT. `resp` holds curl's own stderr (that is what -sS
+    # is for) followed by the -w line; strip the latter and print curl's actual message
+    # rather than guessing at a cause.
+    curl_msg="${resp%$'\n'*}"        # drop the -w line; curl still emits it on failure
+    curl_msg="${curl_msg%"${curl_msg##*[![:space:]]}"}"   # and its trailing blank line
     echo "❌ POST /actions/runners/${endpoint} — could not reach GitHub (curl exit ${rc})." >&2
-    echo "   ${resp}" >&2
-    echo "   This is a network fault, not the PAT. Check egress from this container:" >&2
-    echo "     docker exec ${HOSTNAME:-<runner>} curl -sS -o /dev/null -w '%{http_code}' https://api.github.com" >&2
+    echo "   ${curl_msg}" >&2
+    echo "   No response was received, so this is NOT the PAT — do not rotate it. Check egress:" >&2
+    echo "     docker exec <app>-runner-N-runner-1 curl -sS -o /dev/null -w '%{http_code}' https://api.github.com" >&2
+    echo "   (this container shares dind's netns, so \$HOSTNAME here is dind's id, not its own)" >&2
     echo "   'Can't assign requested address' means the *host* is out of ephemeral ports;" >&2
     echo "   check 'netstat -an -f inet | grep -c TIME_WAIT' on the Mac (see VEN-1316)." >&2
     return 1
