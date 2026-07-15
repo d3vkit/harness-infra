@@ -30,9 +30,17 @@ Commands:
 <app> is the basename of a file in apps/ (e.g. `kyra` → apps/kyra.env). Size N to
 Docker Desktop RAM (each pair carries its own dind + the job's containers).
 
+Environment:
+  SKIP_IMAGE_BUILD=1    Reuse the existing harness-runner:<stack> image instead of
+                        rebuilding. Use when the base rebuild can't reach the registry
+                        (flaky NAT on `FROM ubuntu:…`) but the prior image is still good:
+                          SKIP_IMAGE_BUILD=1 bin/ci-runner <app> reset
+  CI_RUNNER_REPLICAS=N  Default pair count when N is omitted (apps/<app>.env may pin it;
+                        kyra is pinned to 1 — an explicit N overrides the pin).
+
 First run for an app:
   cp apps/secret.env.example apps/<app>.secret.env   # set GITHUB_PAT
-  bin/ci-runner <app> up 2
+  bin/ci-runner <app> up
 USAGE
 }
 
@@ -102,10 +110,10 @@ delete_app_runners() {
   done
 }
 
-# Build the image once, then start N pairs with unique runner names.
+# Start N pairs with unique runner names. Callers build the image first — never from in
+# here, so a network-dependent build can never fail *after* a teardown (VEN-1305).
 start_pairs() {
   local n="$1" i
-  build_images
   echo "🚀 ${app}: starting $n runner pair(s) [${prefix}-1..$n] → ${REPO_OWNER}/${REPO_NAME} [${RUNNER_LABELS}]"
   for i in $(seq 1 "$n"); do
     export RUNNER_NAME="${prefix}-${i}"
@@ -118,6 +126,7 @@ case "$cmd" in
     : "${GITHUB_PAT:?Set GITHUB_PAT in apps/${app}.secret.env or the environment}"
     N="${3:-${CI_RUNNER_REPLICAS:-1}}"
     if ! [[ "$N" =~ ^[0-9]+$ ]] || [ "$N" -lt 1 ]; then echo "up <N>: N must be a positive integer" >&2; exit 2; fi
+    build_images
     start_pairs "$N"
     echo "ℹ️  Each pair runs its own dind + the job's containers — size N to Docker Desktop RAM."
     ;;
@@ -127,10 +136,19 @@ case "$cmd" in
     : "${GITHUB_PAT:?Set GITHUB_PAT in apps/${app}.secret.env or the environment}"
     N="${3:-${CI_RUNNER_REPLICAS:-1}}"
     if ! [[ "$N" =~ ^[0-9]+$ ]] || [ "$N" -lt 1 ]; then echo "reset <N>: N must be a positive integer" >&2; exit 2; fi
+    # Build first, tear down second. build_images reaches the registry (`FROM ubuntu:…`),
+    # i.e. it is the step most likely to fail — and the flaky NAT that SKIP_IMAGE_BUILD
+    # exists for is exactly when an operator reaches for `reset`. Building after the
+    # teardown turned a blip into "all pairs down, all registrations deleted, no image":
+    # healthy → zero runners, on the command README documents for a routine scale-down.
+    build_images
     echo "🔻 Resetting ${app} runners (down → clear registrations → up $N)…"
     for p in $(list_projects); do echo "🛑 $p"; compose_p "$p" down; done
     echo "🧹 Clearing GitHub registrations for ${prefix}-* on ${REPO_OWNER}/${REPO_NAME}…"
-    delete_app_runners
+    # Non-fatal past this point: the teardown has already happened, so aborting here would
+    # strand the app with zero runners over a cleanup step that `config.sh --replace`
+    # largely self-heals anyway. Report and continue to the restart.
+    delete_app_runners || echo "⚠️  Could not clear registrations; continuing (--replace should reclaim the names)." >&2
     sleep 15   # let server-side runner sessions clear before re-registering the same names
     start_pairs "$N"
     echo "✅ ${app}: reset to $N fresh pair(s)."
