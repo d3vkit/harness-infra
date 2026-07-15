@@ -91,23 +91,58 @@ build_images() {
     -f "$DIR/images/${STACK}/Dockerfile" "$DIR"
 }
 
-# GitHub API via the app's PAT (curl, like entrypoint.sh — no `gh` dependency).
+# GitHub API via the app's PAT (curl, like entrypoint.sh — no `gh` dependency). Prints the
+# response body; returns non-zero on any non-2xx, with the status and body on stderr.
+#
+# The status check is the point. Plain `curl -sSL` exits 0 for 401/403/404/422 — it only
+# fails on transport errors — so an error page flowed downstream as if it were data: jq
+# found no `.runners` in it, emitted nothing, and the caller could not tell a dead PAT from
+# a repo with nothing to clean.
 gh_api() {
-  curl -sSL -H "Authorization: Bearer ${GITHUB_PAT}" \
+  local resp code body
+  resp="$(curl -sSL -w $'\n%{http_code}' -H "Authorization: Bearer ${GITHUB_PAT}" \
     -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" "$@"
+    -H "X-GitHub-Api-Version: 2022-11-28" "$@")" || {
+      echo "❌ GitHub API unreachable (curl transport error)." >&2
+      return 1
+    }
+  code="${resp##*$'\n'}"
+  body="${resp%$'\n'*}"
+  case "$code" in
+    2*) printf '%s' "$body"; return 0 ;;
+    401) echo "❌ GitHub API 401 — the PAT is invalid or expired." >&2 ;;
+    403) echo "❌ GitHub API 403 — the PAT lacks 'Administration: Read and write' on ${REPO_OWNER}/${REPO_NAME}, or is rate-limited." >&2 ;;
+    404) echo "❌ GitHub API 404 — ${REPO_OWNER}/${REPO_NAME} not found, or the PAT can't see it." >&2 ;;
+    *)   echo "❌ GitHub API ${code:-000}: ${body}" >&2 ;;
+  esac
+  return 1
 }
 
 # Delete this app's runner registrations (name "<prefix>-N") from the repo — clears
 # the stale/conflicting sessions a restart or cutover leaves behind.
+#
+# Errors are handled explicitly rather than left to `set -e`: `reset` calls this as the
+# left side of `||`, which suspends errexit for this whole body, so a failing command here
+# would otherwise sail on and the function would return 0.
 delete_app_runners() {
-  local ids id
-  ids="$(gh_api "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runners?per_page=100" \
-    | jq -r --arg p "$prefix" '.runners[]? | select(.name | startswith($p + "-")) | .id')"
+  local ids id rc=0
+  if ! ids="$(gh_api "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runners?per_page=100" \
+    | jq -r --arg p "$prefix" '.runners[]? | select(.name | startswith($p + "-")) | .id')"; then
+    echo "   Could not list runners for ${REPO_OWNER}/${REPO_NAME} — nothing was cleared." >&2
+    return 1
+  fi
+  [ -n "$ids" ] || { echo "  no stale ${prefix}-* registrations to clear."; return 0; }
   for id in $ids; do
-    gh_api -X DELETE "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runners/${id}" >/dev/null 2>&1 \
-      && echo "  cleared registration ${id}"
+    # Gate the success line on the actual 204 — a refused DELETE used to print
+    # "cleared registration N" regardless, which was simply untrue.
+    if gh_api -X DELETE "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runners/${id}" >/dev/null; then
+      echo "  cleared registration ${id}"
+    else
+      echo "  ⚠️  could not clear registration ${id}" >&2
+      rc=1
+    fi
   done
+  return "$rc"
 }
 
 # Start N pairs with unique runner names. Callers build the image first — never from in
@@ -148,10 +183,19 @@ case "$cmd" in
     # Non-fatal past this point: the teardown has already happened, so aborting here would
     # strand the app with zero runners over a cleanup step that `config.sh --replace`
     # largely self-heals anyway. Report and continue to the restart.
-    delete_app_runners || echo "⚠️  Could not clear registrations; continuing (--replace should reclaim the names)." >&2
+    cleared=1
+    delete_app_runners || { cleared=0; echo "⚠️  Could not clear registrations; continuing (--replace should reclaim the names)." >&2; }
     sleep 15   # let server-side runner sessions clear before re-registering the same names
     start_pairs "$N"
-    echo "✅ ${app}: reset to $N fresh pair(s)."
+    # Say only what happened, in both channels. The pairs did start, so we don't abort —
+    # but a partial reset must not exit 0: this is the mandated recovery command, and
+    # `reset && echo ok` printing ok is the same defect as the ✅ line, just for scripts.
+    if [ "$cleared" = 1 ]; then
+      echo "✅ ${app}: reset to $N fresh pair(s)."
+    else
+      echo "⚠️  ${app}: started $N fresh pair(s), but stale registrations were NOT cleared (see above)." >&2
+      exit 1
+    fi
     ;;
   down)
     projs="$(list_projects)"; [ -z "$projs" ] && { echo "No ${app} runner pairs running."; exit 0; }
