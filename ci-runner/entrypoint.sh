@@ -16,24 +16,47 @@ API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
 REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}"
 
 # Mint a runner registration/removal token via the GitHub API.
-# Echoes the token on success; on failure prints the HTTP status + likely cause and
-# returns non-zero. Deliberately not `curl -f` so set -o pipefail can't kill the
-# script before the diagnostic.
+# Echoes the token on success; on failure names the ACTUAL cause and returns non-zero.
+# Deliberately not `curl -f` so set -o pipefail can't kill the script before the diagnostic.
+#
+# The diagnosis has to follow the status code. This used to print "the PAT needs
+# Administration: Read and write, and must not be expired" for *every* failure — so on
+# 2026-07-14 it said exactly that, 49 cycles running, while the PAT was fine and the real
+# fault was the host having exhausted its ephemeral ports (VEN-1316). An operator following
+# that advice rotates a working token and is no closer. A wrong cause costs more than no
+# cause, because it forecloses the right one.
 mint_runner_token() {
-  local endpoint="$1" resp code body
+  local endpoint="$1" resp rc code body
   resp="$(curl -sSL -w $'\n%{http_code}' -X POST \
     -H "Authorization: Bearer ${GITHUB_PAT}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "${API}/actions/runners/${endpoint}" 2>/dev/null)" || true
-  code="${resp##*$'\n'}"
-  body="${resp%$'\n'*}"
-  if [ "$code" != "201" ]; then
-    echo "❌ POST /actions/runners/${endpoint} → HTTP ${code:-000}." >&2
-    echo "   The PAT needs repo 'Administration: Read and write' on ${REPO_OWNER}/${REPO_NAME}, and must not be expired." >&2
+    "${API}/actions/runners/${endpoint}" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # curl itself failed: nothing was received, so this is transport — never credentials.
+    # `resp` holds curl's own stderr (that's what -sS is for); print it instead of guessing.
+    echo "❌ POST /actions/runners/${endpoint} — could not reach GitHub (curl exit ${rc})." >&2
+    echo "   ${resp}" >&2
+    echo "   This is a network fault, not the PAT. Check egress from this container:" >&2
+    echo "     docker exec ${HOSTNAME:-<runner>} curl -sS -o /dev/null -w '%{http_code}' https://api.github.com" >&2
+    echo "   'Can't assign requested address' means the *host* is out of ephemeral ports;" >&2
+    echo "   check 'netstat -an -f inet | grep -c TIME_WAIT' on the Mac (see VEN-1316)." >&2
     return 1
   fi
-  jq -r '.token // empty' <<<"$body"
+  code="${resp##*$'\n'}"
+  body="${resp%$'\n'*}"
+  case "$code" in
+    201) jq -r '.token // empty' <<<"$body"; return 0 ;;
+    401) echo "❌ POST /actions/runners/${endpoint} → 401. The PAT is invalid or expired." >&2 ;;
+    403) echo "❌ POST /actions/runners/${endpoint} → 403. The PAT lacks repo 'Administration: Read and write' on ${REPO_OWNER}/${REPO_NAME}, or is rate-limited." >&2
+         echo "   ${body}" >&2 ;;
+    404) echo "❌ POST /actions/runners/${endpoint} → 404. ${REPO_OWNER}/${REPO_NAME} not found, or the PAT can't see it (check REPO_OWNER/REPO_NAME in apps/*.env)." >&2 ;;
+    5??) echo "❌ POST /actions/runners/${endpoint} → ${code}. GitHub-side error; this should clear on its own." >&2
+         echo "   ${body}" >&2 ;;
+    *)   echo "❌ POST /actions/runners/${endpoint} → ${code:-000}." >&2
+         echo "   ${body}" >&2 ;;
+  esac
+  return 1
 }
 
 echo "⏳ Waiting for the Docker-in-Docker daemon (${DOCKER_HOST:-unset})…"
@@ -89,13 +112,20 @@ if ! REG_TOKEN="$(mint_runner_token registration-token)" || [ -z "$REG_TOKEN" ];
   exit 1
 fi
 
-# Best-effort deregister on exit so a stopped runner doesn't linger as offline.
+# Best-effort deregister on exit so a stopped runner doesn't linger as offline. Best-effort
+# means "don't fail the cycle over it", not "say nothing": a deregistration that silently
+# never happens is what leaves the stale same-name sessions `reset` exists to clear, and the
+# `2>/dev/null || true` here hid both the reason and the fact.
 cleanup() {
   echo "🧹 Deregistering runner…"
   local rm_token
-  rm_token="$(mint_runner_token remove-token 2>/dev/null || true)"
-  if [ -n "${rm_token:-}" ]; then
-    ./config.sh remove --token "$rm_token" >/dev/null 2>&1 || true
+  if ! rm_token="$(mint_runner_token remove-token)" || [ -z "$rm_token" ]; then
+    echo "⚠️  Could not mint a remove-token; leaving '${RUNNER_NAME}' registered." >&2
+    echo "   It will linger as offline until --replace reclaims the name on the next cycle." >&2
+    return 0
+  fi
+  if ! ./config.sh remove --token "$rm_token" >/dev/null 2>&1; then
+    echo "⚠️  config.sh remove failed; '${RUNNER_NAME}' may linger as offline." >&2
   fi
 }
 trap cleanup EXIT
