@@ -187,12 +187,14 @@ case "$cmd" in
     delete_app_runners || { cleared=0; echo "⚠️  Could not clear registrations; continuing (--replace should reclaim the names)." >&2; }
     sleep 15   # let server-side runner sessions clear before re-registering the same names
     start_pairs "$N"
-    # Say only what happened. The pairs did start, but claiming a clean reset when the
-    # registration sweep failed is how an operator ends up debugging the wrong layer.
+    # Say only what happened, in both channels. The pairs did start, so we don't abort —
+    # but a partial reset must not exit 0: this is the mandated recovery command, and
+    # `reset && echo ok` printing ok is the same defect as the ✅ line, just for scripts.
     if [ "$cleared" = 1 ]; then
       echo "✅ ${app}: reset to $N fresh pair(s)."
     else
       echo "⚠️  ${app}: started $N fresh pair(s), but stale registrations were NOT cleared (see above)." >&2
+      exit 1
     fi
     ;;
   down)
