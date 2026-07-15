@@ -8,6 +8,14 @@
 # every team the API key can see; scope it to any team(s) and/or project(s) with
 # the flags below.
 #
+# Keep this runnable on macOS's system ruby (/usr/bin/ruby, currently 2.6) — no 3.x-only
+# syntax. global-common.md makes this script the required recovery path when the shared
+# Linear ticket cap blocks a mandatory ticket create, and promises it needs "only Ruby".
+# Agents reach it from non-interactive shells, which get /usr/bin/ruby rather than an
+# asdf/rbenv shim. 3.1 shorthand hashes (`{ query:, variables: }`) once broke this at
+# *parse* time, so no in-script version check could report it — the tool just looked
+# broken at the exact moment the cap made it mandatory. (VEN-1321)
+#
 # Scope (combine freely; default = every team in the workspace):
 #   --team KEY         restrict to team(s) by key, repeatable (e.g. --team VEN --team WHA)
 #   --project NAME|ID  restrict to Linear project(s) by name or UUID, repeatable
@@ -152,7 +160,7 @@ def graphql(api_key, query, variables = {})
   loop do
     attempts += 1
     req = Net::HTTP::Post.new(uri.path, "Content-Type" => "application/json", "Authorization" => api_key)
-    req.body = JSON.generate({ query:, variables: })
+    req.body = JSON.generate({ query: query, variables: variables })
     res = http.request(req)
 
     # Retry Linear rate limiting / transient 5xx a few times with linear backoff,
@@ -244,7 +252,7 @@ puts "Scope: #{scope.empty? ? "all teams in the workspace" : scope.join(" | ")}"
 tickets = []
 cursor = nil
 loop do
-  page = graphql(api_key, FETCH_QUERY, { filter:, after: cursor })["issues"]
+  page = graphql(api_key, FETCH_QUERY, { filter: filter, after: cursor })["issues"]
   tickets.concat(page["nodes"])
   print "\rFetched #{tickets.size} Done tickets..."
   $stdout.flush
