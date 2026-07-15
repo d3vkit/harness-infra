@@ -31,7 +31,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
-    restart: unless-stopped
+    restart: always            # not unless-stopped — see the runner's note below (VEN-1306)
     # Per-pair resource ceilings (see ci-runner/README.md → Sizing): bound each nested
     # Docker daemon so one runaway job can't consume the whole shared Docker VM and starve
     # co-tenant runner agents past their GitHub heartbeat → "lost communication". Rails-sized
@@ -56,7 +56,11 @@ services:
       REPO_NAME: ${REPO_NAME:?set REPO_NAME}
       RUNNER_NAME: ${RUNNER_NAME:?set RUNNER_NAME}
       RUNNER_LABELS: ${RUNNER_LABELS:?set RUNNER_LABELS}
-    restart: unless-stopped     # ephemeral runner exits after each job; restart re-registers
+    # Ephemeral runner exits after each job; the restart is what re-registers it. `always`
+    # rather than `unless-stopped` so a pair that was stopped by hand still returns once the
+    # daemon is back — nobody should have to remember to restart CI. `bin/ci-runner <app> down`
+    # removes the containers outright, so pausing a pair is unaffected by this. (VEN-1306)
+    restart: always
     mem_limit: ${RUNNER_MEM:-4g}  # runs rspec + Chromium system specs; a cgroup ceiling stops one
     cpus: ${RUNNER_CPUS:-2.5}     # leaky/runaway job from swamping the VM and stalling other runners
     volumes:

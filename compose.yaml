@@ -33,7 +33,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    restart: unless-stopped
+    # `always`, not `unless-stopped`, so a DB that was stopped by hand still returns once
+    # the daemon is back. Every agent session across every app reads its rule tiers from
+    # here and the SessionStart hooks fail open, so a DB that stays down is invisible —
+    # it must not depend on someone remembering to start it. (VEN-1306)
+    restart: always
 
 volumes:
   harness_pg_data:
