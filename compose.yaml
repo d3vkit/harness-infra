@@ -33,7 +33,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    restart: unless-stopped
+    # `always`, not `unless-stopped`: quitting Docker Desktop from the menu stops
+    # containers gracefully, which sets HasBeenManuallyStopped — and `unless-stopped`
+    # is defined by never restarting those again. Every agent session across every app
+    # reads its rules from here, so the DB must come back on its own. (VEN-1306)
+    restart: always
 
 volumes:
   harness_pg_data:
