@@ -129,8 +129,16 @@ worked example; `expo`/`godot` are stubs to fill against those apps' workflows.
 
 - **One PAT per app**, in the gitignored `apps/<app>.secret.env`, scoped to one repo
   with only `Administration: Read and write`.
-- **Ephemeral + private repos**: a runner takes one job then re-registers; no state
-  bleeds between jobs, and fork-PR risk doesn't apply to private repos.
+- **Ephemeral + private repos**: a runner takes one job then re-registers, and fork-PR
+  risk doesn't apply to private repos. "Ephemeral" is a *registration* property, not a
+  filesystem one — some state deliberately survives a job, so don't read it as isolation:
+  - `bundle-cache` is a persistent per-pair volume, and warming it is the whole point.
+    Setting `BUNDLE_PATH` also disables bundler's auto-clean, so superseded gems stay
+    resident; a job that poisons the cache poisons later jobs on that pair until it is
+    removed by hand.
+  - `dind-storage` persists the nested image cache. `entrypoint.sh` force-clears dind's
+    containers and volumes each cycle, so a *job's* services don't survive — but the
+    images do.
 - **dind is privileged but never exposed** (its API listens only inside the shared
   netns; no host port is published).
 
