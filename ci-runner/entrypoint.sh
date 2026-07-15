@@ -43,14 +43,44 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-# dind state persists in its volume across jobs; keep it from accumulating. Runs each
-# cycle because the runner is ephemeral (one job → exit → Compose restart → re-register).
-docker system prune -f >/dev/null 2>&1 || true
-# `docker system prune` does NOT touch volumes, so anonymous service volumes (Postgres
-# PGDATA, Supabase, redis) left by GitHub Actions `services:` accumulate every cycle and
-# eventually fill the shared dind disk (→ CI PG::DiskFull). Drop unused anonymous volumes
-# too. Anonymous-only (no -a): named volumes are never removed.
-docker volume prune -f >/dev/null 2>&1 || true
+# Cycle-start cleanup. `--ephemeral` governs only the GitHub registration: Compose
+# restarts this same container rather than recreating it, so neither dind nor this
+# filesystem resets on its own. Both sides are cleaned here, every cycle.
+#
+# Best-effort by design — a cleanup failure must not abort the cycle and strand the pair
+# — but reported rather than swallowed: a silent failure here is precisely how the disk
+# filled last time.
+scrub() { "$@" || echo "⚠️  cycle cleanup: '$*' failed; continuing (state may accumulate)." >&2; }
+
+# 1. The paired dind daemon. dind is per-pair scratch (one Compose project per pair, each
+#    with its own dind-storage), so everything inside it is disposable between jobs.
+#    `rm -fv` catches what `system prune` cannot: prune only removes *stopped* containers,
+#    so a job interrupted mid-run (e.g. the runner replaced by `up N` while it was busy)
+#    leaves its `services:` containers *running*, squatting the pair's published ports —
+#    every later job on this pair then dies at "Initialize containers" with
+#    "Bind for 0.0.0.0:5432 failed: port is already allocated", and a re-run never clears it.
+leftovers="$(docker ps -aq 2>/dev/null || true)"
+if [ -n "$leftovers" ]; then
+  echo "🧹 Removing $(printf '%s\n' "$leftovers" | wc -l | tr -d ' ') leftover container(s) from the previous cycle…"
+  # shellcheck disable=SC2086  # deliberate word-splitting: one id per argument
+  scrub docker rm -fv $leftovers
+fi
+scrub docker system prune -f >/dev/null
+# `-a` (all unused), not anonymous-only: Actions `services:` and `supabase start` create
+# *named* volumes, which anonymous-only pruning leaves behind forever. A surviving
+# supabase_db_* volume is worse than a full disk — `supabase start` restores its stale
+# PGDATA and `db:migrate` applies only the delta, so the parity gate passes against
+# week-old schema the PR never produced. Safe: this pair's dind-storage and bundle-cache
+# are volumes of the *host* daemon and are not visible from inside dind.
+scrub docker volume prune -af >/dev/null
+
+# 2. This container's own filesystem. Unaffected by DOCKER_HOST, and never reset by the
+#    restart, so job leftovers accumulate for the container's whole life. `_work/` is
+#    deliberately untouched: it holds the warm checkout and the tool cache.
+scrub rm -rf /tmp/ferrum_user_data_dir_* /tmp/.org.chromium.*
+if [ -d /home/runner/_diag ]; then
+  scrub find /home/runner/_diag -type f -mtime +1 -delete
+fi
 
 echo "🔑 Minting a runner registration token for ${REPO_OWNER}/${REPO_NAME}…"
 if ! REG_TOKEN="$(mint_runner_token registration-token)" || [ -z "$REG_TOKEN" ]; then
