@@ -82,7 +82,11 @@ cooldown for Expo, kyra_api for Rails). Replace `<app>` and `<stack>` throughout
    (`read` / `set-resume` / `add-todo` / `done` / `log`), scoped `WHERE app=$HARNESS_APP`.
 
 Then seed and verify (below). For a devcontainer, also join `agent-harness-net` in the
-devcontainer compose so in-container tooling reaches `harness-db:5432`.
+devcontainer compose so in-container tooling reaches `harness-db:5432` — this network join is
+what makes the next point true. Any app that ships a `.devcontainer/` inherits the `global`-tier
+rule that agents run the app's toolchain **inside** the running devcontainer (not on the host;
+the host-side git worktree/push/PR flow stays on the host). The rule is keyed on the directory's
+presence, so a new devcontainer app is covered automatically with no per-app rule to add.
 
 ## Registering a new stack
 
