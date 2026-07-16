@@ -59,6 +59,7 @@ fi
 set -a
 # shellcheck disable=SC1090
 . "$APP_ENV"
+# shellcheck disable=SC1090
 [ -f "$DIR/apps/${app}.secret.env" ] && . "$DIR/apps/${app}.secret.env"
 set +a
 

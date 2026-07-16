@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Every check here must be able to FAIL. This repo has a documented history of failure being
+# aliased to success (VEN-1310: gh_api swallowed HTTP errors; reset reported success when it
+# cleared nothing), and the harness auto-merge gate reads "CI is green on GitHub" as a fact to
+# verify. A check that cannot go red would make that verification a lie, so never add a step
+# here that reports green without asserting something.
+
+# A superseded run is wasted spend and a stale signal on a force-pushed branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-latest
+    # Without this a hung step holds the gate "pending" for the 6h default. The auto-merge gate
+    # reads pending as not-green, so a hang stalls every merge rather than failing loudly.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Ruby syntax
+        run: |
+          set -euo pipefail
+          find script -name '*.rb' -print0 | xargs -0 -n1 ruby -c
+
+      - name: Shell syntax
+        run: |
+          set -euo pipefail
+          bash -n ci-runner/entrypoint.sh
+          bash -n ci-runner/bin/ci-runner
+
+      - name: Shellcheck
+        # Pinned image rather than apt's shellcheck: the version is then identical to the one this
+        # was verified against locally, so a runner-image bump cannot turn the gate red on its own.
+        # -S warning: style nits in a working script are not worth a red gate; real bugs are.
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.9.0 \
+            -S warning ci-runner/entrypoint.sh ci-runner/bin/ci-runner
+
+      - name: Compose files are valid
+        # ci-runner/compose.yaml declares five ${VAR:?} interpolations that bin/ci-runner exports
+        # at runtime, so a bare `config -q` can never pass. Placeholders let compose validate the
+        # file's structure and interpolation, which is what is being checked here — they are not
+        # a real runner configuration and nothing is started.
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml config -q
+          RUNNER_IMAGE=placeholder:ci \
+          REPO_OWNER=placeholder \
+          REPO_NAME=placeholder \
+          RUNNER_LABELS=placeholder \
+          RUNNER_NAME=placeholder \
+            docker compose -f ci-runner/compose.yaml config -q
+
+  rules:
+    name: rule sources + seeder round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The seeder is the SOLE writer of the global* rule tiers for every participating app, and it
+    # has no unit tests. Running it end-to-end against a throwaway Postgres is the only thing that
+    # actually proves a rules/*.md edit lands as the rows agents read.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install pg gem and client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpq-dev postgresql-client
+          gem install pg --no-document
+
+      - name: Rule sources parse cleanly
+        # No DB needed. Catches a rule silently truncated or dropped by the seeder's parser.
+        run: ruby script/verify_global_rules.rb
+
+      - name: Canonical schema applies through the pg gem, as production does
+        # ensure_schema applies this file with conn.exec(file.read) through the pg gem, NOT with
+        # psql. That distinction is the whole point of the cleaner's trap #1: psql executes
+        # `\restrict` as a meta-command, while the pg gem sees a syntax error. Validating only
+        # through psql would verify the file along a path structurally incapable of seeing the
+        # failure it is meant to catch — the VEN-1310 shape. So apply it the way production will.
+        run: |
+          set -euo pipefail
+          ruby -e '
+            require "pg"
+            sql = File.read("db/harness_schema.sql")
+            conn = PG.connect(host: ENV["PGHOST"], port: Integer(ENV["PGPORT"]),
+                              dbname: ENV["PGDATABASE"], user: ENV["PGUSER"],
+                              password: ENV["PGPASSWORD"])
+            conn.exec(sql)
+            puts "schema applied via pg gem"
+          '
+
+      - name: Restored schema is complete
+        # The apply step proves the DDL does not error; it does not prove the schema is whole.
+        # A truncated dump applies cleanly and creates almost nothing, so assert the shape rather
+        # than printing a number nobody compares.
+        run: |
+          set -euo pipefail
+          tables=$(psql -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='agent_harness';")
+          echo "tables: $tables"
+          # 15 as of this commit; a schema change should update this deliberately, not silently.
+          if [ "$tables" -ne 15 ]; then
+            echo "::error::expected 15 agent_harness tables, found $tables — db/harness_schema.sql is incomplete"
+            exit 1
+          fi
+          for t in rules invariants work_log; do
+            psql -tAc "SELECT to_regclass('agent_harness.$t');" | grep -q "agent_harness.$t" || {
+              echo "::error::table $t missing from the restored schema"; exit 1; }
+          done
+          # The app column is what every tier query depends on; postcard's fork lost it silently.
+          psql -tAc "SELECT 1 FROM information_schema.columns WHERE table_schema='agent_harness' AND table_name='rules' AND column_name='app';" | grep -q 1 || {
+            echo "::error::rules.app missing — the schema predates app-scoping"; exit 1; }
+
+      - name: Seeder round-trip and idempotency
+        # Seeds for real, reads the rows back, asserts counts match the parsed sources, then seeds
+        # again and asserts nothing duplicated (rebuild_rules! is DELETE + INSERT with no
+        # transaction wrapper).
+        run: ruby script/verify_global_rules.rb --round-trip
