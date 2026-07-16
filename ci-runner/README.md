@@ -127,11 +127,33 @@ worked example; `expo`/`godot` are stubs to fill against those apps' workflows.
 
 ## Security
 
-- **One PAT per app**, in the gitignored `apps/<app>.secret.env`, scoped to one repo
-  with only `Administration: Read and write`.
-- **Ephemeral + private repos**: a runner takes one job then re-registers, and fork-PR
-  risk doesn't apply to private repos. "Ephemeral" is a *registration* property, not a
-  filesystem one — some state deliberately survives a job, so don't read it as isolation:
+**A job is root on this VM, by design.** Read that before anything else here. `runner` has
+NOPASSWD sudo (parity with hosted runners), and `DOCKER_HOST` is an *unauthenticated,
+privileged* Docker daemon sharing the runner's network namespace. A job step needs no sudo
+to do this:
+
+```
+docker run --rm --privileged alpine sh -c "mount /dev/vda1 /mnt; ls /mnt/docker"
+```
+
+That reaches the host VM's `/var/lib/docker`: every pair's writable layer, and the image
+layer store. So a job can reach **the other apps' pairs**, and can plant into the images
+later containers are built from — which is why recreating a container, or `reset`, would
+not evict it. Treat every pair as fully trusted with the whole VM and with every repo whose
+PAT is on it. Runner "ephemerality" is a *registration* property; it is not a sandbox, and
+no in-container mitigation makes it one. See VEN-1339.
+
+What limits the blast radius today is that the repos are **private and single-owner**, so
+there is no fork-PR path — a hostile job needs a compromised dependency (a gem executing
+during `bundle install`), a compromised action, or a compromised collaborator.
+
+Given that, the rest is hygiene rather than defence:
+
+- **The PAT is in plain container env**, not an Actions secret, so no log masking applies —
+  a `run: env` step prints it. It is currently the *same* token across kyra/pamm/postcard/
+  ephemeral, each with `Administration: Read and write`, so any job on any pair holds admin
+  on all four repos. Splitting it into four scoped PATs is VEN-1307.
+- **State deliberately survives a job**, so don't read "ephemeral" as isolation:
   - `bundle-cache` is a persistent per-pair volume, and warming it is the whole point.
     Bundler does not prune it unless asked (`bundle clean`), so superseded gem versions
     stay resident; a job that poisons the cache poisons later jobs on that pair until it
@@ -139,7 +161,10 @@ worked example; `expo`/`godot` are stubs to fill against those apps' workflows.
   - `dind-storage` persists the nested image cache. `entrypoint.sh` force-clears dind's
     containers and volumes each cycle, so a *job's* services don't survive — but the
     images do.
-- **dind is privileged but never exposed** (its API listens only inside the shared
-  netns; no host port is published).
+  - The runner container is restarted, never recreated, so its filesystem carries over.
+    `entrypoint.sh` clears `/tmp` and `_diag` each cycle; `_work/` is kept deliberately
+    (warm checkout + tool cache). A job that wedges `/home/runner` therefore poisons that
+    pair until `down`/`reset` — a second cause of "stuck runners" besides the GitHub-side
+    session conflicts.
 
 See [docs/runbooks/self-hosted-ci-runner.md](../docs/runbooks/self-hosted-ci-runner.md).

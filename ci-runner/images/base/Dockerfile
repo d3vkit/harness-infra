@@ -32,9 +32,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       docker-ce-cli docker-buildx-plugin docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root runner user with passwordless sudo (parity with hosted runners), plus a
-# writable tool cache for the setup-* actions (RUNNER_TOOL_CACHE defaults here, and
-# hosted runners ship it; without it ruby/setup-ruby & friends fail with EACCES).
+# Non-root runner user with passwordless sudo (parity with hosted runners; jobs legitimately
+# `sudo apt-get install`, so this is deliberate — and it means nothing in this image is a
+# security boundary; see ci-runner/README.md → Security).
+#
+# /opt/hostedtoolcache must exist and be runner-writable, but NOT because RUNNER_TOOL_CACHE
+# points here — it is unset, so actions/runner uses its own default of _work/_tool, which is
+# where `actions/*` tools actually land (node, live). This path matters because
+# `ruby/setup-ruby` looks here on Linux, and it is where images/rails/Dockerfile bakes Ruby;
+# without the dir, creating it as uid 1001 fails with EACCES.
 RUN useradd -m -s /bin/bash runner \
     && usermod -aG sudo runner \
     && echo "runner ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/runner \
