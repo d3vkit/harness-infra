@@ -1,0 +1,248 @@
+Third-party code statically linked into the prebuilt libraries in this directory
+================================================================================
+
+The two binaries here —
+
+    libtwovoip.linux.template_debug.arm64.so
+    libtwovoip.linux.template_release.arm64.so
+
+— are compiled from goatchurchprime/two-voip-godot-4 at tag v4.2 (see build-arm64.sh and
+README.md), and statically link the five components below. This repository is public, so
+committing these binaries is redistribution in binary form; MIT requires the copyright and
+permission notice accompany all copies, and BSD-3 clause 2 requires binary redistributions
+reproduce the copyright notice, conditions and disclaimer "in the documentation and/or other
+materials provided with the distribution". This file is that material. Each notice below is
+reproduced verbatim from the exact pinned source that was compiled.
+
+Component        Upstream                                        Pinned at
+---------        --------                                        ---------
+twovoip          github.com/goatchurchprime/two-voip-godot-4     tag v4.2
+godot-cpp        github.com/godotengine/godot-cpp                3dd9bf1695910f81f986df17244f0179eb671263
+opus             github.com/xiph/opus                            ddbe48383984d56acd9e1ab6a090c54ca6b735a6
+rnnoise          github.com/werman/noise-suppression-for-voice   9c4e5c28d8950e2cef837d8a0abd36c2fd9b5c2d
+                 (subdirectory external/rnnoise only)
+speex_resampler  VENDORED inside two-voip-godot-4 itself, at     tag v4.2 (tree 384af1de6a82beca798b4375f6175ad6cde0f40c)
+                 src/speex_resampler/ — NOT a submodule
+
+Enumerate the components from what the binary LINKS, not from .gitmodules — v4.2 declares only
+three submodules (godot-cpp, opus, noise-suppression-for-voice), so a submodule-derived list
+silently misses speex_resampler, which is vendored source in twovoip's own tree. Its object code
+is in these .so: resample.c's own speex_resampler_strerror strings ("Input and output buffers
+overlap.", "Unknown error. Bad error code or strange version mismatch.") are present in both.
+Note also that Jean-Marc Valin appears in opus's and rnnoise's notices too, but that does not
+discharge speex's — a different work's notice naming the same person is not this work's notice,
+and Thorvald Natvig appears in no other component. The condition text differs materially as well
+(speex clause 3 is "The name of the author may not be used..."; opus's names the Internet
+Society/IETF/IETF Trust), so one cannot stand in for the other.
+
+Not currently linked, but one bump away: src/speex_resampler/resample_neon.h and resample_sse.h
+add a third holder (Copyright (C) 2011 Texas Instruments, author Jyri Sarha). They compile only
+under USE_NEON / USE_SSE, which the v4.2 build never defines — verified against SConstruct — so
+they are excluded today even on arm64. A future build that enables NEON must add that holder.
+
+NOT GPL — read this before assuming otherwise
+---------------------------------------------
+The rnnoise code comes from the werman/noise-suppression-for-voice submodule, whose ROOT LICENSE
+is GPL-3.0. That GPL-3.0 covers werman's JUCE-based VST/LV2 plugin product, which is NOT built and
+NOT linked here. twovoip's SConstruct cmake-builds only the vendored `external/rnnoise`
+subdirectory (BSD-3, Xiph/Valin) and links `-lRnNoise`; JUCE is never compiled. Verified against
+the shipped binaries: `strings` finds zero JUCE symbols and zero GPL references in either .so, and
+the rnnoise + opus symbols that are present correspond to the BSD-3 code below. If you re-run
+build-arm64.sh on a future tag, re-check this before assuming it still holds.
+
+On a version bump: regenerate the libraries with build-arm64.sh AND refresh the notices below from
+the new pinned sources, so attribution stays in lockstep with the bytes.
+
+Attribution follows the pattern of the webrtc-native addon already baked into the same image
+(/opt/godot-vendor/webrtc/ ships one LICENSE.* per statically-linked dependency).
+
+
+================================================================================
+1. twovoip — MIT
+   github.com/goatchurchprime/two-voip-godot-4 @ v4.2, file: LICENSE
+================================================================================
+
+MIT License
+
+Copyright (c) 2024 Julian Todd
+Copyright (c) 2023 K. S. Ernest (iFire) Lee
+Copyright (c) 2023 Gordon MacPherson
+Copyright (c) 2023 Marc Weber
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+================================================================================
+2. godot-cpp — MIT
+   github.com/godotengine/godot-cpp @ 3dd9bf1695910f81f986df17244f0179eb671263, file: LICENSE.md
+================================================================================
+
+# MIT License
+
+Copyright (c) 2017-present Godot Engine contributors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+================================================================================
+3. opus — BSD-3-Clause
+   github.com/xiph/opus @ ddbe48383984d56acd9e1ab6a090c54ca6b735a6, file: COPYING
+================================================================================
+
+Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
+                    Jean-Marc Valin, Timothy B. Terriberry,
+                    CSIRO, Gregory Maxwell, Mark Borgerding,
+                    Erik de Castro Lopo, Mozilla, Amazon
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of Internet Society, IETF or IETF Trust, nor the
+names of specific contributors, may be used to endorse or promote
+products derived from this software without specific prior written
+permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Opus is subject to the royalty-free patent licenses which are
+specified at:
+
+Xiph.Org Foundation:
+https://datatracker.ietf.org/ipr/1524/
+
+Microsoft Corporation:
+https://datatracker.ietf.org/ipr/1914/
+
+Broadcom Corporation:
+https://datatracker.ietf.org/ipr/1526/
+
+
+================================================================================
+4. rnnoise — BSD-3-Clause
+   github.com/werman/noise-suppression-for-voice @ 9c4e5c28d8950e2cef837d8a0abd36c2fd9b5c2d,
+   file: external/rnnoise/COPYING
+================================================================================
+
+Copyright (c) 2007-2017, 2024 Jean-Marc Valin
+Copyright (c) 2023 Amazon
+Copyright (c) 2017, Mozilla
+Copyright (c) 2005-2017, Xiph.Org Foundation
+Copyright (c) 2003-2004, Mark Borgerding
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of the Xiph.Org Foundation nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+================================================================================
+5. speex_resampler — BSD-3-Clause
+   Vendored source (NOT a submodule) inside github.com/goatchurchprime/two-voip-godot-4
+   @ v4.2, directory src/speex_resampler/ (tree 384af1de6a82beca798b4375f6175ad6cde0f40c),
+   file: resample.c
+================================================================================
+
+/* Copyright (C) 2007-2008 Jean-Marc Valin
+   Copyright (C) 2008      Thorvald Natvig
+
+   File: resample.c
+   Arbitrary resampling code
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+
+   1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+   2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+   IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+   OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+   INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+   (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+   STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+   ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGE.
+*/
