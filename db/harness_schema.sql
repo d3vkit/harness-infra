@@ -3,19 +3,27 @@
 --
 -- This repo owns the shared harness DB (compose.yaml here defines it;
 -- script/build_global_rules.rb is the sole writer of the global* rule tiers), so this
--- file is the canonical schema. Apps must not fork it — their build_harness_db.rb
--- resolves this file via HARNESS_INFRA_ROOT rather than keeping a local copy.
+-- file is the canonical schema.
 --
--- Rebuild from the live DB with:
+-- Apps still keep their own db/harness_schema.sql forks (pamm, kyra_api, postcard) and their
+-- ensure_schema still reads the local fork. Pointing them here is intended but NOT yet done —
+-- nothing reads HARNESS_INFRA_ROOT today. Do not describe that mechanism as if it exists.
+--
+-- Rebuild the SQL body below from the live DB with:
 --   docker exec -e PGPASSWORD=postgres agent-harness-infra-harness-db-1 \
 --     pg_dump -U postgres -d postgres --schema-only --schema=agent_harness \
---     --no-owner --no-privileges | ruby script/clean_schema_dump.rb > db/harness_schema.sql
+--     --no-owner --no-privileges | ruby script/clean_schema_dump.rb
+-- That reproduces everything after this header, byte for byte. It does NOT reproduce the
+-- header, so do not redirect it straight over this file — splice the body in beneath.
 --
 -- Two traps the cleaner exists to handle — do NOT reintroduce them by hand-dumping:
 --
---   1. `\restrict` / `\unrestrict`. pg_dump >= 16.14 wraps its output in these. They are
---      *psql meta-commands*, not SQL, so ensure_schema's `conn.exec(file.read)` (pg gem)
---      dies on them. Older dumps predate them, which is why the app forks lack them.
+--   1. `\restrict` / `\unrestrict`. Recent pg_dump wraps its output in these (observed with
+--      the 16.14 client in the harness container; the exact version that introduced them has
+--      not been established here, so do not cite a threshold). They are *psql meta-commands*,
+--      not SQL, so ensure_schema's `conn.exec(file.read)` (pg gem) dies on them. The app forks
+--      lack them because each fork's header documents removing them BY HAND after dumping —
+--      an easy step to forget, which is why this is automated here.
 --
 --   2. `SET transaction_timeout`. A PostgreSQL 17+ GUC. The harness DB is postgres:16
 --      (see compose.yaml), which errors with "unrecognized configuration parameter".

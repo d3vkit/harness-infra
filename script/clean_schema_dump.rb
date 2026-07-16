@@ -29,18 +29,38 @@ Encoding.default_internal = Encoding::UTF_8
 DROP_PREFIXES = ["\\restrict", "\\unrestrict"].freeze
 DROP_PATTERN  = /\A\s*SET\s+transaction_timeout\b/i
 
+# This filter is line-oriented, not SQL-aware, so it cannot tell a real statement from the same
+# text inside a string literal (a COMMENT ON body, a function body, a default). Both targets only
+# ever appear in pg_dump's PREAMBLE — the \restrict guard and the SET block it emits before any
+# object DDL — so dropping is confined to the lines before the first CREATE/COMMENT/ALTER. Past
+# that boundary every line passes through untouched, and a comment containing the text
+# "SET transaction_timeout" survives instead of being silently corrupted in the DR artifact.
+BODY_STARTS = /\A\s*(CREATE|COMMENT|ALTER|GRANT|REVOKE|COPY|INSERT|SELECT)\b/i
+
 dropped = Hash.new(0)
+in_preamble = true
 
 ARGF.each_line do |line|
-  if DROP_PREFIXES.any? { |p| line.start_with?(p) }
+  in_preamble = false if in_preamble && line.match?(BODY_STARTS)
+
+  if in_preamble
+    if DROP_PREFIXES.any? { |p| line.start_with?(p) }
+      dropped[line.split.first] += 1
+      next
+    end
+    if line.match?(DROP_PATTERN)
+      dropped["SET transaction_timeout"] += 1
+      next
+    end
+  elsif DROP_PREFIXES.any? { |p| line.start_with?(p) }
+    # pg_dump closes with \unrestrict after the body. Safe to drop at column 0: SQL never has a
+    # statement starting with a backslash, so this cannot be a line inside a literal.
     dropped[line.split.first] += 1
     next
   end
-  if line.match?(DROP_PATTERN)
-    dropped["SET transaction_timeout"] += 1
-    next
-  end
+
   print line
 end
 
 dropped.each { |what, n| warn "clean_schema_dump: dropped #{n} #{what} line(s)" }
+warn "clean_schema_dump: nothing dropped — check the dump is raw pg_dump output" if dropped.empty?

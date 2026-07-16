@@ -20,6 +20,41 @@ require "json"
 require "pathname"
 require_relative "build_global_rules"
 
+# An unrecognised flag must never be ignored. `--round-trip` mistyped as `--roundtrip` would
+# otherwise silently run the file checks alone and still print PASS — a green that asserts far
+# less than the reader believes, which is the failure-aliased-to-success shape this repo keeps
+# correcting (VEN-1310).
+KNOWN_FLAGS = ["--round-trip"].freeze
+unknown = ARGV - KNOWN_FLAGS
+unless unknown.empty?
+  abort "verify_global_rules: unknown argument(s): #{unknown.join(' ')}\nusage: ruby script/verify_global_rules.rb [--round-trip]"
+end
+
+# --round-trip calls the real seeder, which DELETEs and rewrites every global* tier. The seeder's
+# DB defaults (inherited via require) are the SHARED harness DB at 127.0.0.1:55432 — so running
+# this with no PG* env set would reseed production and, worse, assert idempotency by seeding it
+# twice. Refuse the shared port unless the caller says explicitly that they mean it.
+if ARGV.include?("--round-trip")
+  shared = DB[:port] == 55432 || DB[:host] == "harness-db"
+  if shared && ENV["ALLOW_SHARED_HARNESS_DB"] != "1"
+    abort <<~MSG
+      verify_global_rules: refusing --round-trip against the shared harness DB.
+
+        target: #{DB[:host]}:#{DB[:port]} (database #{DB[:dbname]})
+
+      --round-trip seeds twice to assert idempotency, so it must run against a THROWAWAY database.
+      Start one and point at it:
+
+        docker run -d --rm --name harness-verify -e POSTGRES_PASSWORD=postgres \\
+          -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres -p 55499:5432 postgres:16
+        PGHOST=127.0.0.1 PGPORT=55499 ruby script/verify_global_rules.rb --round-trip
+
+      If you genuinely mean to target the shared DB, set ALLOW_SHARED_HARNESS_DB=1. To simply
+      reseed it, run script/build_global_rules.rb instead — that is its job.
+    MSG
+  end
+end
+
 failures = []
 def check(failures, desc)
   ok, detail = yield
