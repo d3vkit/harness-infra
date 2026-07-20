@@ -66,7 +66,13 @@ RUN set -eux; \
 
 RUN sudo ./bin/installdependencies.sh
 
+# Placed HERE deliberately — after apt, after the ~100 MB runner tarball, after
+# installdependencies.sh — so this busts only the last two layers and needs no network.
+# Do not move it above the apt block. (procps/pkill is already in ubuntu:24.04; no apt
+# edit is needed, and adding one would invalidate the runner download for nothing.)
 COPY --chown=runner:runner entrypoint.sh /home/runner/entrypoint.sh
-RUN chmod +x /home/runner/entrypoint.sh
+COPY --chown=runner:runner lib/   /home/runner/lib/
+COPY --chown=runner:runner hooks/ /home/runner/hooks/
+RUN chmod +x /home/runner/entrypoint.sh /home/runner/hooks/*.sh
 
 ENTRYPOINT ["/home/runner/entrypoint.sh"]

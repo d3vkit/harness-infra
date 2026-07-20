@@ -78,6 +78,39 @@ list_projects() {
     | grep -E "^${project_base}(-[0-9]+)?$" | sort -u || true   # empty match: not fatal under set -e/pipefail
 }
 
+# Disk-reaper heartbeat. The failure that fills the disk is not "the reaper errored" — it
+# is "the reaper silently stopped running", which produces no output at all and is
+# invisible until CI dies with PG::DiskFull. So check for the ABSENCE of a recent run from
+# somewhere people already look. Deliberately NOT called from `reset`: that is the mandated
+# recovery path and must not grow new failure modes (VEN-1305).
+reaper_heartbeat() {
+  local f="${HOME:-}/.local/state/harness-reap/last-run.json" age
+  [ -n "${HOME:-}" ] || return 0
+  if [ ! -f "$f" ]; then
+    echo "⚠️  Docker disk reaper has never run: script/reap-docker-disk.sh" >&2
+    return 0
+  fi
+  age=$(( ( $(date +%s) - $(stat -f %m "$f" 2>/dev/null || echo 0) ) / 3600 ))
+  [ "$age" -gt 48 ] && echo "⚠️  Disk reaper last ran ${age}h ago (expected daily): $f" >&2
+  grep -q '"exit_code":0' "$f" 2>/dev/null \
+    || echo "⚠️  Disk reaper's last run exited non-zero — see ~/Library/Logs/harness/reap-docker-disk.log" >&2
+  grep -q '"free_pct":"unknown"' "$f" 2>/dev/null \
+    && echo "⚠️  Disk reaper could not read VM headroom — unknown, not healthy." >&2
+  return 0
+}
+
+# An app that opted out of --ephemeral needs a hook file that only exists in a rebuilt
+# image. SKIP_IMAGE_BUILD=1 is the documented recovery path and reuses the OLD image, so
+# the flag would be silently ignored. Warn rather than fail: the pair still runs jobs.
+warn_on_image_flag_skew() {
+  case "${RUNNER_EPHEMERAL:-1}" in 0|false|no) ;; *) return 0 ;; esac
+  if ! docker run --rm --entrypoint test "$RUNNER_IMAGE" -f /home/runner/hooks/job-started.sh 2>/dev/null; then
+    echo "⚠️  ${app}: RUNNER_EPHEMERAL=0 but ${RUNNER_IMAGE} has no hooks/job-started.sh." >&2
+    echo "   The runner will fall back to boot-only cleanup. Rebuild without SKIP_IMAGE_BUILD=1." >&2
+  fi
+  return 0
+}
+
 build_images() {
   # Escape hatch: reuse the existing ${RUNNER_IMAGE} without rebuilding. Lets you
   # recover/start runners when the base rebuild can't reach the registry (flaky NAT
@@ -160,9 +193,11 @@ start_pairs() {
 case "$cmd" in
   up)
     : "${GITHUB_PAT:?Set GITHUB_PAT in apps/${app}.secret.env or the environment}"
+    reaper_heartbeat || true
     N="${3:-${CI_RUNNER_REPLICAS:-1}}"
     if ! [[ "$N" =~ ^[0-9]+$ ]] || [ "$N" -lt 1 ]; then echo "up <N>: N must be a positive integer" >&2; exit 2; fi
     build_images
+    warn_on_image_flag_skew || true
     start_pairs "$N"
     echo "ℹ️  Each pair runs its own dind + the job's containers — size N to Docker Desktop RAM."
     ;;
@@ -203,6 +238,7 @@ case "$cmd" in
     for p in $projs; do echo "🛑 $p"; compose_p "$p" down; done
     ;;
   status|ps)
+    reaper_heartbeat || true
     projs="$(list_projects)"; [ -z "$projs" ] && { echo "No ${app} runner pairs running."; exit 0; }
     for p in $projs; do echo "── $p ──"; compose_p "$p" ps; done
     ;;
