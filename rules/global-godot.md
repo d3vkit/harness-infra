@@ -1,7 +1,8 @@
 # Global rules — Godot stack (`global-godot`)
 
 Canonical source for the `app='global-godot'` tier. These universal rules apply to every
-**Godot (GDScript)** participant (currently riftling and terminal-ai) and are loaded in
+**Godot (GDScript)** participant (currently ceo-sim, emerald, ephemeral, riftling,
+terminal-ai, and vampire) and are loaded in
 addition to the common `global` tier when `HARNESS_STACK=godot`. Seeded only by
 `harness-infra/script/build_global_rules.rb`.
 

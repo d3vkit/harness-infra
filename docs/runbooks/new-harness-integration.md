@@ -25,14 +25,18 @@ Current participants: **rails** = kyra, pamm, postcard · **expo** = cooldown ·
 
 ## Onboarding a new app — file checklist
 
-Copy these from the reference implementation for your stack — **kyra_api** for Rails,
+Copy these from the reference implementation for your stack — **postcard** for Rails,
 **project-emerald** (`~/development/games/project-emerald`) for Godot, **cooldown** for
 Expo. Replace `<app>` and `<stack>` throughout.
 
-Copy the harness wiring only, not the whole repo. kyra_api in particular carries a large
-agent apparatus on top of the harness — role docs, `script/bootstrap-agent.sh`, a
-PreToolUse sentinel gate — none of which is required to participate. The files below are
-the whole contract.
+Those three implement the contract below exactly. **Do not copy kyra_api or pamm to
+onboard** — both predate this contract: neither has a `docs/harness/<app>-rules.md`, and
+their seeders scrape a bespoke doc tree (`.github/copilot-instructions.md` plus
+`docs/roles/*.md`) instead of parsing the rules doc, so a copied seeder points at files a
+new app does not have. kyra_api remains the reference for the *optional* agent apparatus
+layered on top of the harness — role docs, `script/bootstrap-agent.sh`, a PreToolUse
+sentinel gate — none of which is required to participate. The files below are the whole
+contract.
 
 1. **`.mcp.json`** — read access via the harness MCP server. Identical across apps except
    nothing app-specific; gives the agent on-demand `query_database`:
