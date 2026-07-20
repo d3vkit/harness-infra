@@ -32,6 +32,10 @@ services:
       timeout: 5s
       retries: 30
     restart: always            # not unless-stopped — see the runner's note below (VEN-1306)
+    # The runner borrows dind's netns (network_mode below) and its deregistration curl
+    # goes out through it. Compose stops dependents first, so dind should still be up
+    # while cleanup() runs — this is insurance, and it costs nothing when nothing hangs.
+    stop_grace_period: 90s
     # Per-pair resource ceilings (see ci-runner/README.md → Sizing): bound each nested
     # Docker daemon so one runaway job can't consume the whole shared Docker VM and starve
     # co-tenant runner agents past their GitHub heartbeat → "lost communication". Rails-sized
@@ -56,11 +60,27 @@ services:
       REPO_NAME: ${REPO_NAME:?set REPO_NAME}
       RUNNER_NAME: ${RUNNER_NAME:?set RUNNER_NAME}
       RUNNER_LABELS: ${RUNNER_LABELS:?set RUNNER_LABELS}
-    # Ephemeral runner exits after each job; the restart is what re-registers it. `always`
-    # rather than `unless-stopped` so a pair that was stopped by hand still returns once the
-    # daemon is back — nobody should have to remember to restart CI. `bin/ci-runner <app> down`
-    # removes the containers outright, so pausing a pair is unaffected by this. (VEN-1306)
+      # Registration mode, per app. DEFAULT 1 = --ephemeral: exactly what every app does
+      # today. An app opts out in apps/<app>.env; nothing else changes for anyone else.
+      RUNNER_EPHEMERAL: ${RUNNER_EPHEMERAL:-1}
+      # `report` | `full`. Gates only the DESTRUCTIVE part of the per-job hook (inert when
+      # RUNNER_EPHEMERAL=1). Start a newly-opted-in app at `report`, read one job log to
+      # confirm the hook runs before "Initialize containers", then flip to `full`.
+      # Doubles as a kill-switch that needs no image rebuild.
+      CI_RUNNER_SCRUB_MODE: ${CI_RUNNER_SCRUB_MODE:-full}
+      # ACTIONS_RUNNER_HOOK_JOB_STARTED is deliberately NOT set here. entrypoint.sh exports
+      # it, so the hook path and the hook script always version together — set from compose
+      # against an older image, the runner cannot find the hook and FAILS EVERY JOB.
+    # `always` rather than `unless-stopped` so a pair stopped by hand returns once the
+    # daemon is back — nobody should have to remember to restart CI. Under
+    # RUNNER_EPHEMERAL=1 the restart is also what re-registers the runner; under 0 it is
+    # crash recovery only. `bin/ci-runner <app> down` removes the containers outright, so
+    # pausing a pair is unaffected by this. (VEN-1306)
     restart: always
+    # Deregistration is not free under RUNNER_EPHEMERAL=0: entrypoint.sh must forward
+    # SIGTERM to run.sh, wait for the listener, then make two GitHub round-trips. The 10s
+    # default would SIGKILL that mid-flight and strand the registration on every stop.
+    stop_grace_period: 60s
     mem_limit: ${RUNNER_MEM:-4g}  # runs rspec + Chromium system specs; a cgroup ceiling stops one
     cpus: ${RUNNER_CPUS:-2.5}     # leaky/runaway job from swamping the VM and stalling other runners
     volumes:

@@ -39,6 +39,10 @@ jobs:
         run: |
           set -euo pipefail
           bash -n ci-runner/entrypoint.sh
+          bash -n ci-runner/lib/scrub.sh
+          bash -n ci-runner/hooks/job-started.sh
+          bash -n script/reap-docker-disk.sh
+          bash -n script/install-reaper-launchd.sh
           bash -n ci-runner/bin/ci-runner
 
       - name: Shellcheck
@@ -48,7 +52,9 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.9.0 \
-            -S warning ci-runner/entrypoint.sh ci-runner/bin/ci-runner
+            -S warning ci-runner/entrypoint.sh ci-runner/lib/scrub.sh \
+            ci-runner/hooks/job-started.sh script/reap-docker-disk.sh \
+            script/install-reaper-launchd.sh ci-runner/bin/ci-runner
 
       - name: Compose files are valid
         # ci-runner/compose.yaml declares five ${VAR:?} interpolations that bin/ci-runner exports
