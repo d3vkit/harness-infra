@@ -21,12 +21,22 @@ never insert, delete, or rewrite any `global*` tier — those are owned centrall
 An app seeder must `abort` if `HARNESS_APP` starts with `global`.
 
 Current participants: **rails** = kyra, pamm, postcard · **expo** = cooldown · **godot**
-= riftling, terminal-ai · **unreal** = pirates-life.
+= ceo-sim, emerald, ephemeral, riftling, terminal-ai, vampire · **unreal** = pirates-life.
 
 ## Onboarding a new app — file checklist
 
-Copy these from the closest same-stack participant (e.g. riftling for a Godot app,
-cooldown for Expo, kyra_api for Rails). Replace `<app>` and `<stack>` throughout.
+Copy these from the reference implementation for your stack — **postcard** for Rails,
+**project-emerald** (`~/development/games/project-emerald`) for Godot, **cooldown** for
+Expo. Replace `<app>` and `<stack>` throughout.
+
+Those three implement the contract below exactly. **Do not copy kyra_api or pamm to
+onboard** — both predate this contract: neither has a `docs/harness/<app>-rules.md`, and
+their seeders scrape a bespoke doc tree (`.github/copilot-instructions.md` plus
+`docs/roles/*.md`) instead of parsing the rules doc, so a copied seeder points at files a
+new app does not have. kyra_api remains the reference for the *optional* agent apparatus
+layered on top of the harness — role docs, `script/bootstrap-agent.sh`, a PreToolUse
+sentinel gate — none of which is required to participate. The files below are the whole
+contract.
 
 1. **`.mcp.json`** — read access via the harness MCP server. Identical across apps except
    nothing app-specific; gives the agent on-demand `query_database`:
@@ -66,7 +76,7 @@ cooldown for Expo, kyra_api for Rails). Replace `<app>` and `<stack>` throughout
 5. **Reader (optional but recommended)** — a SessionStart hook that surfaces critical
    rules + work-log context at session start. Either:
    - **MCP-only** (cooldown's minimum): no hook; the agent queries on demand via the MCP.
-   - **Hooked** (riftling/terminal-ai for Godot, kyra/pamm for Rails): a
+   - **Hooked** (emerald/riftling/terminal-ai for Godot, kyra/pamm for Rails): a
      `.claude/settings.json` SessionStart hook running `.claude/hooks/session-reminder.sh`.
    The reader's tier selection MUST be the uniform stack-aware predicate:
    ```sql

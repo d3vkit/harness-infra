@@ -22,7 +22,7 @@ their own `app=<name>` tier.
 | `global` | every app | `rules/global-common.md` |
 | `global-rails` | Rails apps (kyra, pamm, postcard) | `rules/global-rails.md` |
 | `global-expo` | Expo/RN apps (cooldown) | `rules/global-expo.md` |
-| `global-godot` | Godot apps (riftling, terminal-ai) | `rules/global-godot.md` |
+| `global-godot` | Godot apps (ceo-sim, emerald, ephemeral, riftling, terminal-ai, vampire) | `rules/global-godot.md` |
 | `<app>` | that app only | the app's own `docs/harness/<app>-rules.md` |
 
 The shared `app='global'` invariants are owned here too (`rules/global-invariants.json`).
