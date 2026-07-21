@@ -88,8 +88,44 @@ contract.
    Use the `${HARNESS_STACK:-<stack>}` / `${HARNESS_APP:-<app>}` fallback form so it is
    safe under `set -u` even if `harness_env.sh` is not sourced.
 
+   **Ordering.** Two schemes are sanctioned, and both carry the tier terms first:
+
+   ```sql
+   -- tier-ordered (session reminders): global, then stack, then app
+   ORDER BY (app = 'global') DESC, (app LIKE 'global-%') DESC, id ASC;
+
+   -- severity-ordered (bootstrap): tiers first, then critical before standard
+   ORDER BY (app = 'global') DESC, (app LIKE 'global-%') DESC,
+            CASE severity WHEN 'critical' THEN 0 WHEN 'standard' THEN 1 ELSE 2 END,
+            id ASC;
+   ```
+
+   Never sort on `severity` directly. Severity values are `advisory`, `critical`,
+   `standard`, so a plain text sort puts `critical` in the *middle* either way —
+   `severity DESC` yields standard → critical → advisory. Use the `CASE` above.
+
+   Dropping `(app LIKE 'global-%')` is not merely cosmetic: without it rows fall
+   through to `id ASC`, and because the central seeder DELETEs and re-INSERTs the
+   `global*` tiers on every run, the order agents see can flip from one reseed to
+   the next.
+
 6. **`script/session_context.sh`** (optional) — read/write the `work_log` table
    (`read` / `set-resume` / `add-todo` / `done` / `log`), scoped `WHERE app=$HARNESS_APP`.
+
+7. **Contract checks** — the read path fails silently when it is wrong: a predicate
+   missing a tier still returns a valid, non-empty result set, so nothing looks
+   broken while a whole tier of rules never reaches an agent (VEN-1392). Two checks
+   in `harness-infra/script/` guard it, and neither is forked per app:
+
+   - **`check_harness_contract.sh [repo]`** — static, no database, milliseconds.
+     Asserts `harness_env.sh` exports both discriminators and that every query
+     against `agent_harness.rules` includes a `global-` tier. Wire it into the
+     participant's own CI as a single step; it is the only part of this contract
+     that is enforceable there.
+   - **`verify_harness_readers.sh`** — functional, against the live DB. Walks every
+     participant on disk, sources each app's own env, and asserts all three tiers
+     come back. Host-side only: it needs sibling checkouts, which CI does not have.
+     Run it after any harness change.
 
 Then seed and verify (below). For a devcontainer, also join `agent-harness-net` in the
 devcontainer compose so in-container tooling reaches `harness-db:5432` — this network join is

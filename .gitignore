@@ -1,0 +1,8 @@
+# Agent worktrees. These are separate git checkouts living inside the repo, so a
+# bare `git add -A` stages them as embedded repositories — a footgun the sibling
+# participants (kyra_api, pamm) already guard against.
+/.worktrees/
+
+# Runner secrets. apps/<app>.env is committed as configuration; the paired
+# .secret.env holds the PAT and must never be.
+ci-runner/apps/*.secret.env

@@ -40,6 +40,8 @@ jobs:
           set -euo pipefail
           bash -n ci-runner/entrypoint.sh
           bash -n ci-runner/bin/ci-runner
+          bash -n script/check_harness_contract.sh
+          bash -n script/verify_harness_readers.sh
 
       - name: Shellcheck
         # Pinned image rather than apt's shellcheck: the version is then identical to the one this
@@ -48,7 +50,33 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.9.0 \
-            -S warning ci-runner/entrypoint.sh ci-runner/bin/ci-runner
+            -S warning ci-runner/entrypoint.sh ci-runner/bin/ci-runner \
+            script/check_harness_contract.sh script/verify_harness_readers.sh
+
+      - name: Contract checker self-test
+        # A checker that cannot fail proves nothing — which is the entire lesson of
+        # VEN-1392, where a wrong query still returned rows and nobody noticed for
+        # months. So assert BOTH directions against committed fixtures: clean on the
+        # good tree, non-zero on a tree carrying the original defect. The bad fixture
+        # deliberately includes a multi-line predicate, because an early version of the
+        # checker confirmed a predicate merely existed without inspecting its tiers and
+        # silently passed three of the eight real sites.
+        run: |
+          set -euo pipefail
+          script/check_harness_contract.sh spec/fixtures/harness-contract/good
+
+          if script/check_harness_contract.sh spec/fixtures/harness-contract/bad >/dev/null 2>&1; then
+            echo "self-test FAILED: the checker passed a tree with a known missing tier" >&2
+            exit 1
+          fi
+
+          found=$(script/check_harness_contract.sh spec/fixtures/harness-contract/bad 2>&1 \
+                  | grep -c 'omits the stack tier' || true)
+          if [ "$found" -ne 2 ]; then
+            echo "self-test FAILED: expected 2 tier violations in the bad fixture, saw ${found}" >&2
+            exit 1
+          fi
+          echo "contract checker self-test: OK (clean tree passes, defective tree fails at both shapes)"
 
       - name: Compose files are valid
         # ci-runner/compose.yaml declares five ${VAR:?} interpolations that bin/ci-runner exports
