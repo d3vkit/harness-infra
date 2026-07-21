@@ -48,6 +48,7 @@ PARTICIPANTS=(
 
 FAIL=0
 MISSING=0
+VERIFIED=0
 
 printf '%-14s %-8s %-8s %-8s %-8s %s\n' APP STACK GLOBAL STACKTIER APPTIER RESULT
 printf '%.0s-' {1..72}; echo
@@ -97,7 +98,8 @@ for entry in "${PARTICIPANTS[@]}"; do
   result="ok"
   if [ "${g:-0}" -eq 0 ]; then result="FAIL  global tier empty"; FAIL=1
   elif [ "${s:-0}" -eq 0 ]; then result="FAIL  global-${stack} tier not reached"; FAIL=1
-  elif [ "${a:-0}" -eq 0 ]; then result="warn  app tier empty (not yet seeded?)"
+  elif [ "${a:-0}" -eq 0 ]; then result="warn  app tier empty (not yet seeded?)"; VERIFIED=$((VERIFIED + 1))
+  else VERIFIED=$((VERIFIED + 1))
   fi
 
   printf '%-14s %-8s %-8s %-8s %-8s %s\n' "$app" "$stack" "$g" "$s" "$a" "$result"
@@ -108,6 +110,17 @@ if [ "$FAIL" -ne 0 ]; then
   echo "harness readers: FAILED — at least one app is not reading a tier it should."
   exit 1
 fi
-[ "$MISSING" -ne 0 ] && echo "harness readers: OK (some apps skipped — database unreachable)" && exit 0
-echo "harness readers: OK — every participant reaches all three tiers."
+
+# A run that verified nothing must not report success. Without this, an
+# unreachable database skips every app and the script still exits 0 — a green
+# result that checked precisely nothing, which is the same disease this whole
+# ticket exists to cure.
+if [ "$VERIFIED" -eq 0 ]; then
+  echo "harness readers: INCONCLUSIVE — no app was actually verified."
+  echo "  Is the harness Postgres up? docker ps | grep agent-harness-infra-harness-db"
+  exit 1
+fi
+
+[ "$MISSING" -ne 0 ] && echo "harness readers: OK — ${VERIFIED} verified, some skipped (database unreachable)" && exit 0
+echo "harness readers: OK — all ${VERIFIED} participants reach all three tiers."
 exit 0

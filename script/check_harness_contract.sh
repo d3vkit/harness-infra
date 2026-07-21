@@ -59,52 +59,83 @@ fi
 # Lines matched but lacking `app IN` are reported separately: a rules query with
 # no app predicate at all reads every app's tier, which is a different bug.
 # ---------------------------------------------------------------------------
-READER_PATHS=(.claude script bin)
-EXISTING=()
-for p in "${READER_PATHS[@]}"; do [ -e "$p" ] && EXISTING+=("$p"); done
+# The app's own discriminators, so we can check the tier a reader names is the
+# tier this app should actually be reading. A rails app selecting 'global-godot'
+# is exactly the silent-wrong-tier failure this script exists to catch, and an
+# earlier version passed it because it only grepped for the literal "global-".
+STACK=$(sed -nE 's/^[[:space:]]*export[[:space:]]+HARNESS_STACK=.*:-([a-z-]+).*/\1/p' "$ENV_FILE" 2>/dev/null | head -1)
+APPNAME=$(sed -nE 's/^[[:space:]]*export[[:space:]]+HARNESS_APP=.*:-([a-z_-]+).*/\1/p' "$ENV_FILE" 2>/dev/null | head -1)
 
-if [ ${#EXISTING[@]} -eq 0 ]; then
-  note "no .claude/, script/ or bin/ to scan — nothing to check"
+READER_FILES=$(find .claude script bin lib -type f \( -name '*.sh' -o -name '*.bash' -o -name '*.rb' \) 2>/dev/null \
+               | grep -v '/build_harness_db' \
+               | grep -v '/check_harness_contract' \
+               | sort) || true
+
+if [ -z "$READER_FILES" ]; then
+  note "no reader scripts found under .claude/, script/, bin/ or lib/"
 else
-  # -I skips binaries; the seeder is excluded because it WRITES one app tier and
-  # legitimately carries no multi-tier read predicate.
-  MATCHES=$(grep -rInE 'agent_harness\.rules' "${EXISTING[@]}" 2>/dev/null \
-            | grep -v 'build_harness_db' \
-            | grep -v 'check_harness_contract') || true
+  BAD=0
+  SEEN=0
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
 
-  if [ -z "$MATCHES" ]; then
-    note "no queries against agent_harness.rules found"
-  else
-    BAD_TIER=0
-    NO_PRED=0
-    while IFS= read -r line; do
-      [ -z "$line" ] && continue
-      loc="${line%%:*}"; rest="${line#*:}"; lineno="${rest%%:*}"
+    # Statement-oriented, not line-oriented. Strip comments first (a `global-`
+    # inside a comment must not satisfy the check), collapse the file to one
+    # line, then cut it into statements at `;`. Every statement mentioning
+    # agent_harness.rules is then judged as a whole, so a predicate any distance
+    # below its FROM is still found — the previous fixed 4-line lookahead both
+    # missed distant predicates and falsely failed correct ones.
+    statements=$(sed -e 's/[[:space:]]#[^"'"'"']*$//' -e 's/^[[:space:]]*#.*$//' -e 's|--[^"'"'"']*$||' "$f" 2>/dev/null \
+                 | tr '\n' ' ' | tr ';' '\n' | grep 'agent_harness\.rules') || true
+    [ -z "$statements" ] && continue
 
-      # A query may span lines: `FROM agent_harness.rules` on one, `WHERE app IN
-      # (...)` on the next. Judge the whole window, never a single line — an
-      # earlier version of this check looked ahead only to confirm a predicate
-      # EXISTED and never inspected its tiers, so it passed three of the eight
-      # sites VEN-1392 shipped. Both questions must be asked of the same text.
-      window=$(sed -n "${lineno},$((lineno + 3))p" "$loc" 2>/dev/null)
-      pred=$(printf '%s' "$window" | grep -E 'app[[:space:]]+IN[[:space:]]*\(' | head -1)
+    while IFS= read -r st; do
+      [ -z "$st" ] && continue
+      SEEN=$((SEEN + 1))
+      short=$(printf '%s' "$st" | sed 's/^[[:space:]]*//' | tr -s ' ' | cut -c1-100)
 
-      if [ -n "$pred" ]; then
-        if ! printf '%s' "$pred" | grep -q "global-"; then
-          fail "${loc}:${lineno} — predicate omits the stack tier"
-          note "$(printf '%s' "$pred" | sed 's/^[[:space:]]*//' | cut -c1-100)"
-          BAD_TIER=$((BAD_TIER + 1))
-        fi
-      elif printf '%s' "$window" | grep -qE 'FROM[[:space:]]+agent_harness\.rules'; then
-        fail "${loc}:${lineno} — reads agent_harness.rules with no app predicate"
+      # Accept either `app IN (...)` or `app = ANY(ARRAY[...])`.
+      if ! printf '%s' "$st" | grep -qE 'app[[:space:]]*(IN[[:space:]]*\(|=[[:space:]]*ANY)'; then
+        fail "${f} — reads agent_harness.rules with no app predicate"
+        note "$short"
         note "an unfiltered read returns every app's rules, not just this one's"
-        NO_PRED=$((NO_PRED + 1))
+        BAD=$((BAD + 1)); continue
       fi
-    done <<< "$MATCHES"
 
-    TOTAL=$(printf '%s\n' "$MATCHES" | grep -c . )
-    if [ "$BAD_TIER" -eq 0 ] && [ "$NO_PRED" -eq 0 ]; then
-      pass "all ${TOTAL} agent_harness.rules queries are tier-complete"
+      if [ -n "${STACK:-}" ]; then
+        # Require this app's OWN stack tier, literal or via the variable.
+        if ! printf '%s' "$st" | grep -qE "global-(${STACK}|\\\$\{?HARNESS_STACK)"; then
+          wrong=$(printf '%s' "$st" | grep -oE "global-[a-z]+" | head -1)
+          if [ -n "$wrong" ]; then
+            fail "${f} — names ${wrong} but this app's stack is ${STACK}"
+          else
+            fail "${f} — predicate omits the stack tier (expected global-${STACK})"
+          fi
+          note "$short"
+          BAD=$((BAD + 1)); continue
+        fi
+      elif ! printf '%s' "$st" | grep -q 'global-'; then
+        fail "${f} — predicate omits the stack tier"
+        note "$short"
+        BAD=$((BAD + 1)); continue
+      fi
+
+      # And the app's own tier: selecting global + stack but not <app> silently
+      # drops every app-specific rule.
+      if [ -n "${APPNAME:-}" ] \
+         && ! printf '%s' "$st" | grep -qE "'${APPNAME}'|\\\$\{?HARNESS_APP"; then
+        fail "${f} — predicate omits this app's own tier ('${APPNAME}')"
+        note "$short"
+        BAD=$((BAD + 1))
+      fi
+    done <<< "$statements"
+  done <<< "$READER_FILES"
+
+  if [ "$BAD" -eq 0 ]; then
+    if [ "$SEEN" -eq 0 ]; then
+      note "no queries against agent_harness.rules found"
+    else
+      pass "all ${SEEN} agent_harness.rules queries select global + global-${STACK:-<stack>} + ${APPNAME:-<app>}"
     fi
   fi
 fi
