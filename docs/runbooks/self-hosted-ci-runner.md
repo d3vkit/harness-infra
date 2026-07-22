@@ -35,6 +35,15 @@ bin/ci-runner <app> reset 2                         # clean recovery: down → c
 `reset` recovers runners stuck after a restart/cutover (same-name GitHub
 "session already exists" conflicts): it clears the app's registrations and re-registers fresh.
 
+A runner that has gone **silently offline** — up in `docker ps` (and maybe still "online" on
+GitHub) but taking no jobs because its session was dropped server-side — is now handled
+automatically: `entrypoint.sh`'s liveness watchdog forces a fresh re-register within minutes
+(`RUNNER_IDLE_MAX_SECONDS`, default 900). It only ever acts while the runner is idle, so it never
+touches a running job. The root cause is Docker-VM RAM starvation; see
+[`ci-runner/README.md` → Sizing](../../ci-runner/README.md#sizing--resource-limits). Reach for
+`reset` when the watchdog can't help: a wedged `/home/runner` filesystem, or stale same-name
+registrations left after a cutover.
+
 Confirm on GitHub → app repo → Settings → Actions → Runners (Idle). Keep the runners
 up while you expect PRs (ephemeral — jobs queue/fail if all are down); before marking
 the self-hosted checks *required*, make sure a runner is reliably up.

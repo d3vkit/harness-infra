@@ -150,6 +150,110 @@ if ! ./config.sh --unattended \
   exit 1
 fi
 
+# ── Liveness watchdog ────────────────────────────────────────────────────────
+# An ephemeral runner is only long-lived while *idle* — a job makes run.sh exit,
+# and the restart re-registers. Two failure modes strand it idle-but-unreachable,
+# and neither ends the cycle on its own, so `restart: always` never fires:
+#
+#   • Silent-dead — the server-side registration is dropped while Runner.Listener
+#     keeps long-polling without error. Observed 2026-07-21 on kyra: "Listening for
+#     Jobs" 22:31Z, first error only 23:22Z, recovered 23:33Z — ~1h offline. Under
+#     Docker-VM RAM starvation (16 GB shared across 3 Rails apps + 4 runner/dind
+#     pairs — see README → Sizing and apps/kyra.env) the starved listener misses its
+#     GitHub heartbeat, GitHub drops the session, and the starved process is too slow
+#     to even notice. No error is logged, so there is nothing to grep for.
+#   • Retry-loop — once it does notice ("Retrying until reconnected." / "listener
+#     exit with retryable error, re-launch runner in 5 seconds.") run.sh relaunches
+#     the listener in place against a dead session. Observed 2026-07-19 on ephemeral:
+#     23:33Z → 02:09Z, ~2.5h looping before it cleared on its own.
+#
+# The watchdog bounds both to minutes by forcing a *clean* re-register: end run.sh so
+# the EXIT trap deregisters and restart:always mints a fresh registration token and
+# re-configs. A fresh registration succeeds where an in-place relaunch against a
+# dropped session cannot; when the real fault is egress, the restart routes through
+# entrypoint's mint-token diagnostic instead of run.sh's opaque 5s relaunch. This
+# bounds the *symptom* — the root cause is VM RAM (README → Sizing); more RAM / fewer
+# always-on apps is what removes it.
+: "${RUNNER_IDLE_MAX_SECONDS:=900}"  # re-register after this long idle with no job (0 disables the backstop)
+: "${RUNNER_WATCH_INTERVAL:=30}"     # how often the watchdog looks
+RUN_LOG="/home/runner/_run.log"      # run.sh's own output (agent lifecycle only; job step logs don't land here)
+
+# The latest significant listener state, read from run.sh's output. run.sh emits only
+# a handful of lifecycle lines per cycle, so scanning the whole (truncated-per-cycle)
+# log is cheap. `|| true` keeps a no-match grep from tripping `set -e`.
+runner_state() {
+  local last=""
+  [ -f "$RUN_LOG" ] && last="$(grep -aE 'Listening for Jobs|Running job:|completed with result:|Retrying until reconnected|listener exit with retryable error|Registration .* was not found' "$RUN_LOG" 2>/dev/null | tail -n1 || true)"
+  case "$last" in
+    *"Running job:"*) echo busy ;;
+    *"Retrying until reconnected"*|*"listener exit with retryable error"*|*"was not found"*) echo disconnected ;;
+    *) echo idle ;;  # "Listening for Jobs", a just-completed job, or nothing logged yet
+  esac
+}
+
+# True while a job is actually executing — the watchdog must never end the cycle then.
+# Prefer the live worker process; fall back to the log so a pgrep miss still holds.
+job_running() {
+  pgrep -f 'Runner\.Worker' >/dev/null 2>&1 && return 0
+  [ "$(runner_state)" = busy ]
+}
+
+# Watch the (backgrounded) run.sh session leader; when it is idle-but-unreachable, end
+# its whole process group so entrypoint falls through to the EXIT trap and restarts.
+liveness_watchdog() {
+  local leader="$1" idle_since strikes=0
+  idle_since="$(date +%s)"
+  while kill -0 "$leader" 2>/dev/null; do
+    sleep "$RUNNER_WATCH_INTERVAL"
+    kill -0 "$leader" 2>/dev/null || return 0   # run.sh exited on its own (normal one-job path)
+    if job_running; then idle_since="$(date +%s)"; strikes=0; continue; fi
+    case "$(runner_state)" in
+      disconnected)
+        # Fast path: a persistent disconnect while idle. Two strikes (~2 polls) so a
+        # transient blip that self-heals between polls doesn't force a needless re-register.
+        strikes=$((strikes + 1))
+        if [ "$strikes" -ge 2 ]; then
+          echo "🩺 watchdog: idle listener stuck on a dropped connection — forcing a clean re-register." >&2
+          break
+        fi
+        ;;
+      *)
+        strikes=0
+        # Backstop: idle far longer than any healthy session should live without a job.
+        # This is the only thing that catches silent-dead, where no error is ever logged.
+        if [ "${RUNNER_IDLE_MAX_SECONDS:-0}" -gt 0 ] && [ "$(( $(date +%s) - idle_since ))" -ge "$RUNNER_IDLE_MAX_SECONDS" ]; then
+          echo "🩺 watchdog: idle ${RUNNER_IDLE_MAX_SECONDS}s with no job — forcing a fresh re-register (bounds the silent-dead state)." >&2
+          break
+        fi
+        ;;
+    esac
+  done
+  # Guard the sub-second "job assigned but Worker not yet spawned" race before ending.
+  if job_running; then
+    echo "🩺 watchdog: a job started as the timer fired — standing down, not ending the cycle." >&2
+    return 0
+  fi
+  # End run.sh AND the Runner.Listener it supervises in one group signal — run.sh
+  # relaunches a bare-killed listener (returnCode 2), so a half-kill would just respawn
+  # it. TERM, brief grace, then KILL. entrypoint's `wait` returns → EXIT trap deregisters.
+  kill -TERM -"$leader" 2>/dev/null || true
+  for _ in 1 2 3 4 5; do kill -0 "$leader" 2>/dev/null || break; sleep 1; done
+  kill -KILL -"$leader" 2>/dev/null || true
+}
+
 echo "🏃 Runner online — waiting for a job (ephemeral: one job, then re-register)…"
-# Not exec'd, so the EXIT trap runs after run.sh returns post-job.
-./run.sh
+# run.sh in its own session so the watchdog can end its whole process group with one
+# signal. Output is tee'd to $RUN_LOG (for the disconnect fast-path) and to stdout (so
+# `ci-runner logs` is unchanged). Not exec'd — the EXIT trap must still run after run.sh
+# returns, whether from a completed job or a watchdog-forced re-register.
+: > "$RUN_LOG"
+setsid bash -c './run.sh 2>&1' > >(tee -a "$RUN_LOG") &
+RUNNER_LEADER=$!
+# On container stop (`ci-runner down`, compose stop) end the group too — otherwise the
+# setsid session outlives entrypoint and only dies on SIGKILL. The EXIT trap still runs.
+trap 'kill -TERM -"$RUNNER_LEADER" 2>/dev/null || true' TERM INT
+liveness_watchdog "$RUNNER_LEADER" &
+WATCHDOG_PID=$!
+wait "$RUNNER_LEADER" || true
+kill "$WATCHDOG_PID" 2>/dev/null || true
+wait "$WATCHDOG_PID" 2>/dev/null || true
