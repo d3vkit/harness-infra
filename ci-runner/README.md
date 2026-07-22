@@ -88,6 +88,37 @@ with the old config.
 > `images/base/Dockerfile` (currently 2.335.1). Bump that pin and rebuild periodically, or
 > GitHub may eventually refuse jobs from a too-old runner.
 
+### When a starved runner goes silently offline
+
+The same oversubscription has a second, quieter failure mode. A starved runner can miss its
+GitHub heartbeat, GitHub drops its session server-side, and the runner keeps long-polling a dead
+registration — so `docker ps` shows it up and GitHub may still show it *online*, while it silently
+takes no jobs. Two shapes, both observed:
+
+- **Silent-dead** — no error is logged at all; the listener just stops receiving work. On
+  2026-07-21 the kyra runner listened from 22:31Z, first logged an error at 23:22Z, and only
+  recovered at 23:33Z when the restart re-registered it — **~1h effectively offline**.
+- **Retry-loop** — it notices (`Retrying until reconnected.` / `listener exit with retryable
+  error, re-launch runner in 5 seconds.`) and `run.sh` relaunches the listener *in place* against
+  the dead session. On 2026-07-19 the ephemeral runner looped this way 23:33Z → 02:09Z, **~2.5h**.
+
+Because the runner never *exits*, `restart: always` never re-registers it. `entrypoint.sh` now runs
+a **liveness watchdog** that bounds both to minutes: when the runner is idle (no job in flight) and
+either shows a persistent disconnect or has simply sat idle past `RUNNER_IDLE_MAX_SECONDS`, it ends
+`run.sh` so the EXIT trap deregisters and the restart mints a *fresh* registration — which succeeds
+where an in-place relaunch against a dropped session cannot. It only ever acts while idle; a job in
+flight always stands it down, so it cannot fail a running job.
+
+| var                      | default | effect                                                               |
+|--------------------------|---------|----------------------------------------------------------------------|
+| `RUNNER_IDLE_MAX_SECONDS`| `900`   | force a fresh re-register after this long idle with no job (`0` off) |
+| `RUNNER_WATCH_INTERVAL`  | `30`    | watchdog poll interval (seconds)                                     |
+
+Override per app in `apps/<app>.env`, same as the sizing ceilings.
+
+This bounds the **symptom**. The **cause** is VM RAM (above): raise the VM to ≥ 24 GB or keep fewer
+always-on apps, and the starvation that drops the session in the first place goes away.
+
 ## Run runners for an app
 
 ```bash

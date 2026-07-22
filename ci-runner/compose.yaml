@@ -56,6 +56,13 @@ services:
       REPO_NAME: ${REPO_NAME:?set REPO_NAME}
       RUNNER_NAME: ${RUNNER_NAME:?set RUNNER_NAME}
       RUNNER_LABELS: ${RUNNER_LABELS:?set RUNNER_LABELS}
+      # Liveness watchdog (entrypoint.sh): force a clean re-register when an ephemeral
+      # runner is stranded idle-but-unreachable — a silent-dead session or an in-place
+      # retry-loop — so that outage is minutes, not the ~1h observed 2026-07-21. It
+      # bounds the *symptom*; the root cause is VM RAM starvation (see the runner note
+      # above and README → Sizing). Override per app in apps/<app>.env.
+      RUNNER_IDLE_MAX_SECONDS: ${RUNNER_IDLE_MAX_SECONDS:-900}  # re-register after this long idle (0 disables)
+      RUNNER_WATCH_INTERVAL: ${RUNNER_WATCH_INTERVAL:-30}       # watchdog poll interval
     # Ephemeral runner exits after each job; the restart is what re-registers it. `always`
     # rather than `unless-stopped` so a pair that was stopped by hand still returns once the
     # daemon is back — nobody should have to remember to restart CI. `bin/ci-runner <app> down`
