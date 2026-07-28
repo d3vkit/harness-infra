@@ -81,12 +81,17 @@ Scripts that operate on **shared, workspace-wide** resources live here (not in a
 one app) so there is a single copy:
 
 - **`script/build_global_rules.rb`** — sole writer of the `global*` rule tiers (see above).
-- **`script/archive_done_linear_tickets.rb`** — archives Done (completed) Linear tickets
-  to keep the shared board under Linear's ticket limit. The limit is **workspace-wide
+- **`script/archive_done_linear_tickets.rb`** — archives closed Linear tickets to keep the
+  shared board under Linear's ticket limit. The limit is **workspace-wide
   across every team** (VentroEdit, Whatchapizza, …), so this lives here rather than in a
   single app hardcoded to its own team. By default it scans every team; scope it with
   `--team KEY` and/or `--project NAME|ID`. Run it from the host — it needs only Ruby +
   internet + `LINEAR_API_KEY` (it hits the Linear API, not the harness DB).
+
+  "Closed" defaults to Done, but `--state` (repeatable) also reaches `canceled` and
+  `duplicate` — a board with no Done tickets left can still be holding plenty of those,
+  so reach for it before concluding a board has nothing to reclaim. The flag is validated
+  against a fixed allow-list of closed states, so no argument can widen it to open work.
 
   It resolves `LINEAR_API_KEY` from the environment, or from your login shell rc (e.g.
   `~/.zshrc`) when the key isn't already exported. That fallback matters for **agents**:
@@ -101,6 +106,8 @@ one app) so there is a single copy:
   # archive everything Done in one team / one project
   ruby script/archive_done_linear_tickets.rb --team WHA --all
   ruby script/archive_done_linear_tickets.rb --project "Live Transcription" --all
+  # reclaim Canceled + Duplicate too, when a board has no Done left
+  ruby script/archive_done_linear_tickets.rb --team VEN --state canceled --state duplicate --all
   ```
 
   See `--help` for all flags (`--threshold`, `--keep`, …).

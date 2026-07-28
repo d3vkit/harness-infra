@@ -311,7 +311,8 @@ tickets.group_by { |t| t.dig("team", "key") }.sort.each do |team_key, group|
   end
 
   by_state = picked.group_by { |t| t.dig("state", "name") }.map { |n, g| "#{g.size} #{n}" }.sort.join(", ")
-  puts "  #{team_key} (#{team_name}): #{group.size} closed -> archiving #{picked.size} (#{reason}) [#{by_state}]."
+  breakdown = by_state.empty? ? "" : " [#{by_state}]" # --keep >= group.size picks nothing; don't print "[]"
+  puts "  #{team_key} (#{team_name}): #{group.size} closed -> archiving #{picked.size} (#{reason})#{breakdown}."
   to_archive.concat(picked)
 end
 
