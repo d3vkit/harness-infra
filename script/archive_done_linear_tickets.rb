@@ -1,7 +1,9 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Archives Done (completed-state) Linear tickets when a board gets crowded.
+# Archives closed Linear tickets when a board gets crowded. "Closed" defaults to
+# Done (completed) but --state also reaches Canceled and Duplicate, which are just
+# as inert on a board and just as much of a drag on the workspace issue cap.
 #
 # Lives in the shared agent-harness-infra repo so every sibling app uses ONE
 # copy instead of a per-app fork hardcoded to its own team. By default it scans
@@ -19,15 +21,22 @@
 # Scope (combine freely; default = every team in the workspace):
 #   --team KEY         restrict to team(s) by key, repeatable (e.g. --team VEN --team WHA)
 #   --project NAME|ID  restrict to Linear project(s) by name or UUID, repeatable
+#   --state TYPE       which closed state(s) to archive, repeatable: completed
+#                      (default), canceled, duplicate
 #
 # Behavior:
-#   (default)          per team: archive Done only when that team has >= --threshold
-#                      Done tickets, keeping the --keep most recently completed
-#   --all              ignore the threshold and keep; archive every Done in scope
+#   (default)          per team: archive matching tickets only when that team has
+#                      >= --threshold of them, keeping the --keep most recently closed
+#   --all              ignore the threshold and keep; archive everything in scope
 #   --threshold N      crowded-board threshold, applied per team (default 50)
-#   --keep N           most-recently-completed Done tickets to keep per team (default 5)
+#   --keep N           most-recently-closed tickets to keep per team (default 5)
 #   --dry-run          print what would be archived; make no changes
 #   -h, --help         show this help
+#
+# Canceled/Duplicate carry no completedAt, so recency for --keep falls back to
+# canceledAt. Auditing WHY a ticket was canceled is a human call — this script
+# only moves already-closed tickets off the board, it never decides they were
+# closed correctly.
 #
 # Auth:
 #   Reads LINEAR_API_KEY from the environment. If it isn't exported there (the
@@ -41,19 +50,23 @@
 #   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb            # all teams, crowded ones only
 #   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --team WHA --all
 #   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --project "Live Transcription" --all
+#   LINEAR_API_KEY=lin_api_xxx ruby script/archive_done_linear_tickets.rb --team VEN --state canceled --state duplicate --all
 
 require "net/http"
 require "json"
 
 USAGE = <<~TXT
-  Archives Done (completed-state) Linear tickets when a board gets crowded.
+  Archives closed Linear tickets when a board gets crowded. Closed defaults to Done;
+  --state also reaches Canceled and Duplicate.
   Scans every team by default; scope with --team and/or --project.
 
     --team KEY         restrict to team(s) by key, repeatable (e.g. --team VEN --team WHA)
     --project NAME|ID  restrict to Linear project(s) by name or UUID, repeatable
+    --state TYPE       closed state(s) to archive, repeatable: completed (default),
+                       canceled, duplicate
     --threshold N      crowded-board threshold, per team (default 50; ignored by --all)
-    --keep N           most-recently-completed Done to keep per team (default 5; ignored by --all)
-    --all              archive every Done in scope, ignoring --threshold and --keep
+    --keep N           most-recently-closed tickets to keep per team (default 5; ignored by --all)
+    --all              archive everything in scope, ignoring --threshold and --keep
     --yes, -y          confirm --all when it has no --team/--project (whole-workspace)
     --dry-run          print what would be archived; make no changes
     -h, --help         show this help
@@ -65,6 +78,11 @@ USAGE = <<~TXT
 TXT
 UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
+# Linear state types that mean "closed, off the board". Deliberately excludes the
+# open types (backlog/unstarted/started/triage) — this script must never be able to
+# archive live work, whatever gets passed to --state.
+CLOSED_STATE_TYPES = %w[completed canceled duplicate].freeze
+
 def parse_int(flag, str)
   Integer(str)
 rescue ArgumentError
@@ -72,7 +90,7 @@ rescue ArgumentError
 end
 
 def parse_args(argv)
-  opts = { teams: [], projects: [], threshold: 50, keep: 5, all: false, dry_run: false, yes: false }
+  opts = { teams: [], projects: [], states: [], threshold: 50, keep: 5, all: false, dry_run: false, yes: false }
   i = 0
   while i < argv.length
     key, inline = argv[i].split("=", 2)
@@ -87,6 +105,12 @@ def parse_args(argv)
     case key
     when "--team"      then opts[:teams] << value.call.upcase
     when "--project"   then opts[:projects] << value.call
+    when "--state"
+      state = value.call.downcase
+      unless CLOSED_STATE_TYPES.include?(state)
+        abort("ERROR: --state expects one of #{CLOSED_STATE_TYPES.join(", ")}, got #{state.inspect}")
+      end
+      opts[:states] << state
     when "--threshold" then opts[:threshold] = parse_int(key, value.call)
     when "--keep"      then opts[:keep] = parse_int(key, value.call)
     when "--all"       then opts[:all] = true
@@ -97,6 +121,8 @@ def parse_args(argv)
     end
     i += 1
   end
+  opts[:states] = ["completed"] if opts[:states].empty?
+  opts[:states].uniq!
   opts
 end
 
@@ -211,7 +237,7 @@ FETCH_QUERY = <<~GQL
   query($filter: IssueFilter, $after: String) {
     issues(filter: $filter, first: 100, after: $after, orderBy: updatedAt) {
       pageInfo { hasNextPage endCursor }
-      nodes { id identifier title completedAt team { key name } }
+      nodes { id identifier title completedAt canceledAt state { name type } team { key name } }
     }
   }
 GQL
@@ -234,12 +260,12 @@ project_ids = resolve_project_ids(api_key, opts[:projects])
 # archive every Done ticket in every team. Require an explicit opt-in.
 if opts[:all] && opts[:teams].empty? && project_ids.empty? && !opts[:dry_run] && !opts[:yes]
   abort <<~MSG
-    ERROR: --all with no --team/--project would archive EVERY Done ticket in the whole workspace.
+    ERROR: --all with no --team/--project would archive EVERY #{opts[:states].join("/")} ticket in the whole workspace.
     Re-run with --dry-run to preview, scope it with --team/--project, or pass --yes to confirm.
   MSG
 end
 
-filter = { state: { type: { eq: "completed" } } }
+filter = { state: { type: { in: opts[:states] } } }
 filter[:team]    = { key: { in: opts[:teams] } } if opts[:teams].any?
 filter[:project] = { id: { in: project_ids } }   if project_ids.any?
 
@@ -247,41 +273,46 @@ scope = []
 scope << "teams #{opts[:teams].join(", ")}" if opts[:teams].any?
 scope << "projects #{opts[:projects].join(", ")}" if opts[:projects].any?
 puts "Scope: #{scope.empty? ? "all teams in the workspace" : scope.join(" | ")}"
+puts "States: #{opts[:states].join(", ")}"
 
-# Fetch all Done tickets in scope.
+# Fetch all matching closed tickets in scope.
 tickets = []
 cursor = nil
 loop do
   page = graphql(api_key, FETCH_QUERY, { filter: filter, after: cursor })["issues"]
   tickets.concat(page["nodes"])
-  print "\rFetched #{tickets.size} Done tickets..."
+  print "\rFetched #{tickets.size} closed tickets..."
   $stdout.flush
   break unless page.dig("pageInfo", "hasNextPage")
   cursor = page.dig("pageInfo", "endCursor")
   sleep 0.2
 end
 puts
-puts "Found #{tickets.size} Done tickets in scope.\n\n"
+puts "Found #{tickets.size} closed tickets in scope.\n\n"
 
 # Decide what to archive, grouped per team (so a crowded team doesn't nuke a
 # quiet team's recent history, and --keep is honored per team).
 to_archive = []
 tickets.group_by { |t| t.dig("team", "key") }.sort.each do |team_key, group|
   team_name = group.first.dig("team", "name")
-  group.sort_by! { |t| t["completedAt"] || "" }.reverse! # most-recently-completed first
+  # Canceled/Duplicate have no completedAt; fall back to canceledAt so --keep means
+  # "most recently closed" for every state rather than sorting them all as "".
+  group.sort_by! { |t| t["completedAt"] || t["canceledAt"] || "" }.reverse!
 
   if opts[:all]
     picked = group
     reason = "--all"
   elsif group.size < opts[:threshold]
-    puts "  #{team_key} (#{team_name}): #{group.size} Done - below threshold of #{opts[:threshold]}, skipping."
+    puts "  #{team_key} (#{team_name}): #{group.size} closed - below threshold of #{opts[:threshold]}, skipping."
     next
   else
     picked = group[opts[:keep]..] || []
     reason = "keeping #{opts[:keep]} most recent"
   end
 
-  puts "  #{team_key} (#{team_name}): #{group.size} Done -> archiving #{picked.size} (#{reason})."
+  by_state = picked.group_by { |t| t.dig("state", "name") }.map { |n, g| "#{g.size} #{n}" }.sort.join(", ")
+  breakdown = by_state.empty? ? "" : " [#{by_state}]" # --keep >= group.size picks nothing; don't print "[]"
+  puts "  #{team_key} (#{team_name}): #{group.size} closed -> archiving #{picked.size} (#{reason})#{breakdown}."
   to_archive.concat(picked)
 end
 
@@ -295,13 +326,18 @@ succeeded = 0
 failed    = 0
 
 to_archive.each_with_index do |t, i|
-  print "\r[#{i + 1}/#{to_archive.size}] #{t["identifier"]} - #{t["title"].to_s[0, 60]}"
-  $stdout.flush
+  label = "[#{i + 1}/#{to_archive.size}] #{t["identifier"]} (#{t.dig("state", "name")}) - #{t["title"].to_s[0, 60]}"
 
+  # A dry run exists to be read, so give it one durable line per ticket instead of
+  # the \r-overwritten progress counter a real run uses.
   if opts[:dry_run]
+    puts label
     succeeded += 1
     next
   end
+
+  print "\r#{label}"
+  $stdout.flush
 
   begin
     graphql(api_key, ARCHIVE_MUTATION, { id: t["id"] })
