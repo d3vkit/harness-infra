@@ -35,6 +35,27 @@ jobs:
           set -euo pipefail
           find script -name '*.rb' -print0 | xargs -0 -n1 ruby -c
 
+      - name: Ruby 2.6 syntax floor
+        # The step above runs under 3.3 and CANNOT catch the VEN-1321 regression: a 3.1 shorthand
+        # hash (`{ query:, variables: }`) is valid 3.x, so `ruby -c` calls it clean — while macOS's
+        # /usr/bin/ruby 2.6.10, which is what a non-interactive shell actually gets, fails to PARSE
+        # it. That killed the archiver global-common.md mandates as the ticket-cap recovery path, at
+        # the one moment the cap made it mandatory, and no in-script version guard could report it.
+        # Until this step existed the floor was held by a header comment alone.
+        #
+        # Self-tested in both directions, because a checker that cannot go red proves nothing (the
+        # lesson of VEN-1310 and VEN-1392): clean on script/*.rb, non-zero on a fixture carrying the
+        # original defect.
+        run: |
+          set -euo pipefail
+          script/check_ruby26_syntax.sh
+
+          if script/check_ruby26_syntax.sh spec/fixtures/ruby26-floor/shorthand_hash.rb >/dev/null 2>&1; then
+            echo "::error::self-test FAILED: the 2.6 checker passed a file with a known 3.1-only construct" >&2
+            exit 1
+          fi
+          echo "ruby 2.6 floor self-test: OK (clean tree passes, 3.1-only syntax fails)"
+
       - name: Shell syntax
         run: |
           set -euo pipefail
@@ -42,6 +63,7 @@ jobs:
           bash -n ci-runner/bin/ci-runner
           bash -n script/check_harness_contract.sh
           bash -n script/verify_harness_readers.sh
+          bash -n script/check_ruby26_syntax.sh
 
       - name: Shellcheck
         # Pinned image rather than apt's shellcheck: the version is then identical to the one this
@@ -51,7 +73,8 @@ jobs:
           set -euo pipefail
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.9.0 \
             -S warning ci-runner/entrypoint.sh ci-runner/bin/ci-runner \
-            script/check_harness_contract.sh script/verify_harness_readers.sh
+            script/check_harness_contract.sh script/verify_harness_readers.sh \
+            script/check_ruby26_syntax.sh
 
       - name: Contract checker self-test
         # A checker that cannot fail proves nothing — which is the entire lesson of

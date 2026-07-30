@@ -18,6 +18,10 @@
 # *parse* time, so no in-script version check could report it — the tool just looked
 # broken at the exact moment the cap made it mandatory. (VEN-1321)
 #
+# That constraint is now enforced, not just asserted here: script/check_ruby26_syntax.sh
+# parse-checks this file against a pinned ruby:2.6.10-slim on every PR. Run it locally before
+# pushing a change here — CI's other Ruby step runs 3.3 and will call 3.1-only syntax clean.
+#
 # Scope (combine freely; default = every team in the workspace):
 #   --team KEY         restrict to team(s) by key, repeatable (e.g. --team VEN --team WHA)
 #   --project NAME|ID  restrict to Linear project(s) by name or UUID, repeatable
