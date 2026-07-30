@@ -88,6 +88,14 @@ one app) so there is a single copy:
   `--team KEY` and/or `--project NAME|ID`. Run it from the host — it needs only Ruby +
   internet + `LINEAR_API_KEY` (it hits the Linear API, not the harness DB).
 
+  "Only Ruby" means **any** Ruby, including macOS's `/usr/bin/ruby` (2.6) — which is what a
+  non-interactive shell gets, and therefore what agents get. Keeping that true is a hard
+  constraint on this file, not a preference: 3.x-only syntax fails at *parse* time, so it
+  presents as a broken tool rather than a fixable environment problem, precisely when the
+  ticket cap has made the script mandatory (VEN-1321). CI enforces the floor with
+  `script/check_ruby26_syntax.sh`, which parse-checks every `script/*.rb` against a pinned
+  `ruby:2.6.10-slim`; run it locally before pushing a change to any of them.
+
   "Closed" defaults to Done, but `--state` (repeatable) also reaches `canceled` and
   `duplicate` — a board with no Done tickets left can still be holding plenty of those,
   so reach for it before concluding a board has nothing to reclaim. The flag is validated
