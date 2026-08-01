@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# script/review-pr — on-demand local adversarial review (VEN-1526).
+#
+# Runs the shared adversarial-review engine locally using `claude -p` (Claude
+# Code headless), which authenticates through YOUR Claude subscription — no
+# Anthropic API key, no per-token cost. It reviews a PR's diff and posts the
+# `opus-adversarial-review` commit status to the PR head SHA, which is the exact
+# status the branch-protection ruleset requires: a `failure`/absent status blocks
+# the merge, a `success` unblocks it (once test/system-test are also green).
+#
+# This is the subscription-friendly counterpart to the CI/API path in the
+# reusable adversarial-review.yml workflow; both share ci-review/run_review.rb.
+#
+# Usage:
+#   script/review-pr <pr-number>              # infers the repo from `gh` in cwd
+#   script/review-pr <owner/repo> <pr-number> # explicit repo
+#
+# Requirements (all local): gh (authenticated), claude (logged in), ruby.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+engine="$here/../ci-review/run_review.rb"
+
+die() { echo "review-pr: $*" >&2; exit 1; }
+
+for bin in gh claude ruby; do
+  command -v "$bin" >/dev/null 2>&1 || die "'$bin' not found on PATH"
+done
+[ -f "$engine" ] || die "engine not found at $engine"
+
+case $# in
+  1) repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" \
+       || die "no repo given and not inside a gh-recognized repo"
+     pr="$1" ;;
+  2) repo="$1"; pr="$2" ;;
+  *) die "usage: review-pr [<owner/repo>] <pr-number>" ;;
+esac
+
+[[ "$pr" =~ ^[0-9]+$ ]] || die "pr number must be numeric, got: $pr"
+
+token="$(gh auth token 2>/dev/null)" || die "gh is not authenticated (run: gh auth login)"
+
+echo "review-pr: reviewing $repo #$pr with claude -p (local, on your subscription)…" >&2
+
+# `set -e` must not abort on a non-approve exit — capture it via `if`.
+if GITHUB_REPOSITORY="$repo" \
+   PR_NUMBER="$pr" \
+   GITHUB_TOKEN="$token" \
+   REVIEW_BACKEND="claude-cli" \
+   REVIEW_FORCE="1" \
+     ruby "$engine"; then
+  rc=0
+else
+  rc=$?
+fi
+
+if [ "$rc" -eq 0 ]; then
+  echo "review-pr: APPROVE — opus-adversarial-review posted success on $repo #$pr." >&2
+else
+  echo "review-pr: not approved — opus-adversarial-review is failure/absent; merge stays blocked." >&2
+fi
+exit "$rc"

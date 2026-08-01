@@ -1,0 +1,94 @@
+# Reusable adversarial-review merge gate (VEN-1526).
+#
+# A calling repo invokes this to post the `opus-adversarial-review` commit
+# status that its branch-protection ruleset requires. The review is run by a
+# machine (the harness ci-review engine calling the Anthropic API), not by the
+# agent that wrote the code — so the sign-off is structurally independent.
+#
+# The caller MUST trigger this on `pull_request_target`, not `pull_request`:
+# under plain `pull_request` the workflow definition is taken from the PR head,
+# so a rogue PR could add a job that self-posts `success`. `pull_request_target`
+# runs the base-branch definition, and this workflow never checks out or
+# executes head-controlled code (it reads the diff through the GitHub API), so a
+# PR cannot tamper with its own gate or exfiltrate the API key.
+#
+# See docs/runbooks/ci-adversarial-review.md for the full contract and the
+# per-app caller snippet.
+
+name: Adversarial Review
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "owner/repo of the pull request to review"
+        required: true
+        type: string
+      pr_number:
+        description: "pull request number"
+        required: true
+        type: string
+      harness_ref:
+        description: >-
+          Ref of d3vkit/harness-infra to load the review engine from. Defaults
+          to main so engine fixes propagate without every app re-pinning; the
+          tamper-safety comes from pull_request_target + the engine living here,
+          not in the app under review.
+        required: false
+        type: string
+        default: main
+      model:
+        description: "Anthropic model id for the review"
+        required: false
+        type: string
+        default: claude-opus-5
+      effort:
+        description: "Reasoning effort: low|medium|high|xhigh|max"
+        required: false
+        type: string
+        default: high
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  adversarial-review:
+    name: adversarial review
+    runs-on: ubuntu-latest
+    # A hung request must not hold the required status pending for the 6h
+    # default — the merge gate reads pending as not-green.
+    timeout-minutes: 20
+    permissions:
+      # statuses:write is what actually satisfies the ruleset; the repo default
+      # is read-only, so it must be granted explicitly here.
+      statuses: write
+      pull-requests: read
+      contents: read
+    steps:
+      # Only checkout is the harness repo, to obtain the review engine. The PR's
+      # own code is never checked out or executed — the engine reads the diff as
+      # data through the GitHub API. Checking out harness `main` (not the PR
+      # head) is also what makes a harness self-review use the base engine.
+      - name: Load review engine
+        uses: actions/checkout@v4
+        with:
+          repository: d3vkit/harness-infra
+          ref: ${{ inputs.harness_ref }}
+          path: _harness
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Run adversarial review
+        env:
+          GITHUB_REPOSITORY: ${{ inputs.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          # The automatic per-job token; its scope is the job `permissions` above.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed explicitly by the caller — never via `secrets: inherit`.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REVIEW_MODEL: ${{ inputs.model }}
+          REVIEW_EFFORT: ${{ inputs.effort }}
+        run: ruby _harness/ci-review/run_review.rb

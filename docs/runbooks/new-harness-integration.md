@@ -112,7 +112,16 @@ contract.
 6. **`script/session_context.sh`** (optional) — read/write the `work_log` table
    (`read` / `set-resume` / `add-todo` / `done` / `log`), scoped `WHERE app=$HARNESS_APP`.
 
-7. **Contract checks** — the read path fails silently when it is wrong: a predicate
+7. **CI adversarial-review gate** (optional; needed for agent-run backlog→done) —
+   if the app's `main` ruleset requires an `opus-adversarial-review` status, adopt
+   the shared gate so CI (a machine), not the authoring agent, posts it. Add a
+   `pull_request_target` caller workflow that `uses:`
+   `d3vkit/harness-infra/.github/workflows/adversarial-review.yml@main`, provision
+   an `ANTHROPIC_API_KEY` repo secret, and allow the repo to call harness-infra's
+   reusable workflows. Full contract, security posture, and the caller snippet are
+   in [`ci-adversarial-review.md`](ci-adversarial-review.md).
+
+8. **Contract checks** — the read path fails silently when it is wrong: a predicate
    missing a tier still returns a valid, non-empty result set, so nothing looks
    broken while a whole tier of rules never reaches an agent (VEN-1392). Two checks
    in `harness-infra/script/` guard it, and neither is forked per app:

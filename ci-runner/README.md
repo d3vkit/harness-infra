@@ -198,4 +198,12 @@ Given that, the rest is hygiene rather than defence:
     pair until `down`/`reset` — a second cause of "stuck runners" besides the GitHub-side
     session conflicts.
 
+**Do not put an `ANTHROPIC_API_KEY` (or any cross-app secret) on this VM.** The
+adversarial-review merge gate (VEN-1526, `ci-review/`) needs an Anthropic key but
+runs on GitHub-hosted `ubuntu-latest`, not on this self-hosted pair, precisely
+because a job here is root with an unauthenticated privileged dind: a co-tenant
+job could read another pair's container env, so a key placed here would be
+exposed to every app's jobs. The review needs no Rails toolchain anyway — see
+[docs/runbooks/ci-adversarial-review.md](../docs/runbooks/ci-adversarial-review.md).
+
 See [docs/runbooks/self-hosted-ci-runner.md](../docs/runbooks/self-hosted-ci-runner.md).
