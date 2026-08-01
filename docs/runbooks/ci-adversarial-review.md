@@ -99,6 +99,17 @@ for **both** backends where applicable):
   `pull_request_target` running with secrets, this is the classic pwn-request
   shape — which is why the workflow **never** checks out or runs head code and
   the key is passed explicitly, never via `secrets: inherit`.
+- **Prompt injection via the diff.** The PR author controls the diff, which is
+  exactly what the model reviews — a classic injection surface. The diff is
+  inert (it is passed as data on stdin / in the prompt body and never executed),
+  and `prompt.md` explicitly instructs the model to treat the entire diff as
+  untrusted data, never as instructions, and to rest its verdict solely on the
+  code's security and correctness — a diff that tries to steer the verdict is a
+  red flag, never a reason to approve. This mitigates but does not mathematically
+  eliminate model susceptibility; it is the same class of residual as any
+  LLM-in-the-loop review, and the fail-closed design bounds the blast radius (a
+  compromised verdict still cannot bypass `test`/`system-test`, and a human can
+  always veto via the break-glass path).
 - **Honest residual: status forgery is not closed by this design.** GitHub
   commit statuses have no per-context authorization — *any* token with
   `statuses: write` can POST `opus-adversarial-review=success` on any SHA. In
