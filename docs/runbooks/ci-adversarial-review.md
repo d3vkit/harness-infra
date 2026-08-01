@@ -31,7 +31,41 @@ PR opened/updated
                  5. POST opus-adversarial-review  to the HEAD SHA
 ```
 
-Load-bearing properties (each is asserted by `ci-review/test/run_review_test.rb`):
+### Two backends, one engine (`REVIEW_BACKEND`)
+
+The engine has two interchangeable review backends; everything else (diff
+fetch, verdict → status mapping, fail-closed, head-SHA targeting) is shared:
+
+- **`api`** (default) — calls the Anthropic Messages API with an
+  `ANTHROPIC_API_KEY`. This is the CI/server path the reusable workflow uses.
+- **`claude-cli`** — shells out to a local `claude -p` (Claude Code headless),
+  which authenticates through the operator's **Claude subscription** — no API
+  key, no per-token cost. This is the **on-demand local path** for teams on a
+  subscription, run via `script/review-pr`. It posts the identical required
+  status to the head SHA, so it participates in the branch-protection gate
+  exactly like the API path — the ruleset does not care what produced the
+  status.
+
+**Local, on-demand usage** (subscription, no API key):
+
+```bash
+# from inside the app repo
+harness-infra/script/review-pr <pr-number>
+# or explicitly
+harness-infra/script/review-pr d3vkit/kyra_api <pr-number>
+```
+
+It needs `gh` (authenticated), `claude` (logged in), and `ruby` — all local. It
+reviews the diff with `claude -p` and posts `opus-adversarial-review` to the PR
+head. Because it is on-demand, the gate is armed by default (no status = merge
+blocked) and you unblock a ready PR by running the one command. Trade-offs vs.
+the CI path: it only runs while your machine is up and Claude Code is logged in,
+counts against your plan's usage limits, and an expired login **fails closed**
+(posts `failure`/nothing — never a false approve). A subscription cannot be used
+from CI (hosted or self-hosted) — local is the only place it works.
+
+Load-bearing properties (each is asserted by `ci-review/test/run_review_test.rb`,
+for **both** backends where applicable):
 
 - **Fail closed.** `success` is posted only on a 2xx API call that parses to an
   `APPROVE` verdict. Every other outcome — API error, refusal, truncation,

@@ -36,6 +36,22 @@ class FakeTransport
   end
 end
 
+class FakeClaude
+  attr_reader :calls
+
+  def initialize(out:, ok: true, err: '')
+    @out = out
+    @ok = ok
+    @err = err
+    @calls = []
+  end
+
+  def call(argv, stdin, _timeout)
+    @calls << { argv: argv, stdin: stdin }
+    [@out, @ok, @err]
+  end
+end
+
 module ReviewFixtures
   HEAD_SHA = 'deadbeefcafe1234deadbeefcafe1234deadbeef'
   PR_URL   = 'https://github.com/d3vkit/kyra_api/pull/42'
@@ -97,6 +113,28 @@ module ReviewFixtures
   def run_engine(env_overrides = {}, opts = {})
     transport = FakeTransport.new(&responder(opts))
     code = CIReview::Engine.new(base_env(env_overrides), transport: transport).run
+    [code, transport]
+  end
+
+  # A `claude -p --output-format json` envelope.
+  def claude_envelope(result, is_error: false, subtype: 'success')
+    JSON.generate('type' => 'result', 'subtype' => subtype, 'is_error' => is_error, 'result' => result)
+  end
+
+  def verdict_json(verdict: 'APPROVE', summary: 'ok', findings: [])
+    JSON.generate('verdict' => verdict, 'summary' => summary, 'findings' => findings)
+  end
+
+  # claude-cli backend env intentionally has NO ANTHROPIC_API_KEY — the local
+  # backend authenticates through the Claude Code login, not an API key.
+  def cli_env(overrides = {})
+    base_env(overrides).tap { |e| e.delete('ANTHROPIC_API_KEY') }
+                       .merge('REVIEW_BACKEND' => 'claude-cli')
+  end
+
+  def run_engine_cli(env_overrides, opts, claude)
+    transport = FakeTransport.new(&responder(opts))
+    code = CIReview::Engine.new(cli_env(env_overrides), transport: transport, claude_runner: claude).run
     [code, transport]
   end
 
@@ -253,5 +291,88 @@ class RunReviewTest < Minitest::Test
         r[:headers]['Accept'] == 'application/vnd.github.diff'
     end
     refute_nil diff_get, 'diff must be fetched through the .diff media type, never a checkout'
+  end
+end
+
+# The claude-cli backend (local, Claude Code subscription) must post the SAME
+# required status to the head SHA, so it gates merges identically to the API
+# backend. It also must fail closed on every claude-cli failure mode and need no
+# ANTHROPIC_API_KEY.
+class ClaudeCliBackendTest < Minitest::Test
+  include ReviewFixtures
+
+  def test_approve_posts_success_without_api_key
+    claude = FakeClaude.new(out: claude_envelope(verdict_json(verdict: 'APPROVE', summary: 'clean')))
+    code, tx = run_engine_cli({}, {}, claude)
+    assert_equal 0, code
+    body = last_status(tx)
+    assert_equal 'success', body['state']
+    assert_equal 'opus-adversarial-review', body['context']
+    assert_includes status_posts(tx).last[:uri], "/statuses/#{ReviewFixtures::HEAD_SHA}"
+  end
+
+  def test_request_changes_posts_failure
+    claude = FakeClaude.new(out: claude_envelope(verdict_json(verdict: 'REQUEST_CHANGES', summary: 'bug')))
+    code, tx = run_engine_cli({}, {}, claude)
+    assert_equal 1, code
+    assert_equal 'failure', last_status(tx)['state']
+  end
+
+  def test_is_error_envelope_fails_closed
+    claude = FakeClaude.new(out: claude_envelope('OAuth token expired', is_error: true))
+    code, tx = run_engine_cli({}, {}, claude)
+    assert_equal 1, code
+    assert_equal 'failure', last_status(tx)['state']
+  end
+
+  def test_nonzero_exit_fails_closed
+    claude = FakeClaude.new(out: '', ok: false, err: 'claude not found')
+    code, tx = run_engine_cli({}, {}, claude)
+    assert_equal 1, code
+    assert_equal 'failure', last_status(tx)['state']
+  end
+
+  def test_extracts_json_from_fenced_result
+    fenced = "```json\n#{verdict_json(verdict: 'APPROVE')}\n```"
+    claude = FakeClaude.new(out: claude_envelope(fenced))
+    code, tx = run_engine_cli({}, {}, claude)
+    assert_equal 0, code
+    assert_equal 'success', last_status(tx)['state']
+  end
+
+  def test_extracts_json_from_surrounding_prose
+    prose = "Here is my verdict:\n#{verdict_json(verdict: 'REQUEST_CHANGES', summary: 'x')}\nThanks."
+    claude = FakeClaude.new(out: claude_envelope(prose))
+    code, tx = run_engine_cli({}, {}, claude)
+    assert_equal 1, code
+    assert_equal 'failure', last_status(tx)['state']
+  end
+
+  def test_unparseable_result_fails_closed
+    claude = FakeClaude.new(out: claude_envelope('no json here at all'))
+    code, tx = run_engine_cli({}, {}, claude)
+    assert_equal 1, code
+    assert_equal 'failure', last_status(tx)['state']
+  end
+
+  def test_invokes_claude_headless_with_model
+    claude = FakeClaude.new(out: claude_envelope(verdict_json(verdict: 'APPROVE')))
+    run_engine_cli({ 'REVIEW_MODEL' => 'opus' }, {}, claude)
+    argv = claude.calls.last[:argv]
+    assert_includes argv, '-p'
+    assert_includes argv, '--output-format'
+    assert_includes argv, 'json'
+    assert_equal 'opus', argv[argv.index('--model') + 1]
+    # The diff must be handed to claude on stdin (as data), never as a checkout.
+    assert_includes claude.calls.last[:stdin], '```diff'
+  end
+
+  def test_force_bypasses_already_decided
+    existing = [{ 'context' => 'opus-adversarial-review', 'state' => 'failure' }]
+    claude = FakeClaude.new(out: claude_envelope(verdict_json(verdict: 'APPROVE')))
+    code, tx = run_engine_cli({ 'REVIEW_FORCE' => '1' }, { existing_statuses: existing }, claude)
+    assert_equal 0, code
+    assert_equal 1, status_posts(tx).size, 'REVIEW_FORCE must re-review and re-post'
+    assert_equal 'success', last_status(tx)['state']
   end
 end

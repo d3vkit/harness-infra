@@ -226,11 +226,14 @@ jobs:
         with:
           ruby-version: "3.3"
 
-      - name: Ruby syntax
+      - name: Ruby + shell syntax
         run: |
           set -euo pipefail
           ruby -c ci-review/run_review.rb
           ruby -c ci-review/test/run_review_test.rb
+          bash -n script/review-pr
 
       - name: Engine unit tests (no network, stdlib only)
+        # Covers both backends: the Anthropic API path (CI) and the local
+        # claude-cli path (script/review-pr, on a Claude subscription).
         run: ruby ci-review/test/run_review_test.rb

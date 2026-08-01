@@ -32,24 +32,37 @@
 #     pin determinism that way; instead we skip entirely if this context already
 #     has a status on the head SHA. A new head SHA gets a fresh review.
 #
-# Pure Ruby stdlib (net/http + json + uri) — runs on ubuntu-latest's
+# Pure Ruby stdlib (net/http + json + uri + open3) — runs on ubuntu-latest's
 # preinstalled Ruby with no gems. The engine lives in the harness repo, not in
 # the app under review, so a PR cannot rewrite its own gate.
+#
+# Two review backends, one codebase (REVIEW_BACKEND):
+#   * `api`        [default] — calls the Anthropic Messages API with an
+#                  ANTHROPIC_API_KEY. This is the CI/server path.
+#   * `claude-cli` — shells out to a local `claude -p` (Claude Code headless),
+#                  which runs on the operator's Claude subscription — no API key,
+#                  no per-token cost. This is the on-demand LOCAL path
+#                  (script/review-pr), for teams on a subscription. It still
+#                  posts the exact same required status to the head SHA, so it
+#                  participates in the branch-protection gate identically.
 #
 # Required env:
 #   GITHUB_REPOSITORY  owner/repo of the PR
 #   PR_NUMBER          pull request number
 #   GITHUB_TOKEN       token with statuses:write + pull-requests:read
-#   ANTHROPIC_API_KEY  Anthropic API key
+#   ANTHROPIC_API_KEY  Anthropic API key            (api backend only)
 #
 # Optional env (defaults in brackets):
+#   REVIEW_BACKEND     [api]       api | claude-cli
 #   GITHUB_API_URL     [https://api.github.com]
-#   ANTHROPIC_API_URL  [https://api.anthropic.com]
-#   REVIEW_MODEL       [claude-opus-5]
-#   REVIEW_EFFORT      [high]      one of low|medium|high|xhigh|max
+#   ANTHROPIC_API_URL  [https://api.anthropic.com]  (api backend)
+#   REVIEW_MODEL       [claude-opus-5 for api; opus for claude-cli]
+#   REVIEW_EFFORT      [high]      one of low|medium|high|xhigh|max (api backend)
+#   CLAUDE_BIN         [claude]    claude-cli backend executable
+#   REVIEW_FORCE       [unset]     truthy = review even if a status already exists
 #   STATUS_CONTEXT     [opus-adversarial-review]
 #   MAX_DIFF_BYTES     [200000]    oversized diff -> fail closed, never truncate
-#   MAX_TOKENS         [8000]      caps thinking + output; keep generous
+#   MAX_TOKENS         [8000]      caps thinking + output; keep generous (api)
 #   HTTP_TIMEOUT       [900]       per-request read timeout, seconds
 #   PROMPT_PATH        [<script dir>/prompt.md]
 #   TARGET_URL         [PR html_url] link surfaced on the status
@@ -57,6 +70,8 @@
 require 'net/http'
 require 'json'
 require 'uri'
+require 'open3'
+require 'timeout'
 
 module CIReview
   ANTHROPIC_VERSION = '2023-06-01'
@@ -109,16 +124,38 @@ module CIReview
     end
   end
 
+  # Runs a local `claude -p` (Claude Code headless). Extracted behind a seam so
+  # the engine can be unit tested with a fake runner. Returns [stdout, ok?].
+  class ClaudeCliRunner
+    def call(argv, stdin, timeout)
+      out = err = nil
+      status = nil
+      Timeout.timeout(timeout) do
+        out, err, status = Open3.capture3(*argv, stdin_data: stdin)
+      end
+      [out, status&.success?, err]
+    rescue Timeout::Error
+      ['', false, "claude timed out after #{timeout}s"]
+    rescue Errno::ENOENT => e
+      ['', false, "claude not found: #{e.message}"]
+    end
+  end
+
   class Engine
-    def initialize(env = ENV, transport: NetHTTPTransport.new)
+    def initialize(env = ENV, transport: NetHTTPTransport.new, claude_runner: ClaudeCliRunner.new)
       @env = env
       @transport = transport
+      @claude_runner = claude_runner
+      @backend     = env.fetch('REVIEW_BACKEND', 'api')
+      @force       = truthy?(env['REVIEW_FORCE'])
+      @claude_bin  = env.fetch('CLAUDE_BIN', 'claude')
       # Only non-required config is read here; required vars are validated inside
       # #run so a missing one fails closed (returns non-zero) rather than raising
       # from the constructor.
       @gh_api      = env.fetch('GITHUB_API_URL', 'https://api.github.com')
       @anthropic   = env.fetch('ANTHROPIC_API_URL', 'https://api.anthropic.com')
-      @model       = env.fetch('REVIEW_MODEL', 'claude-opus-5')
+      # claude-cli takes a short alias (`opus`); the API takes a full model id.
+      @model       = env.fetch('REVIEW_MODEL', @backend == 'claude-cli' ? 'opus' : 'claude-opus-5')
       @effort      = env.fetch('REVIEW_EFFORT', 'high')
       @context     = env.fetch('STATUS_CONTEXT', 'opus-adversarial-review')
       @max_diff    = Integer(env.fetch('MAX_DIFF_BYTES', '200000'))
@@ -138,8 +175,8 @@ module CIReview
       @head_sha   = pr.fetch('head').fetch('sha')
       @target_url = @explicit_target || pr['html_url'] || "https://github.com/#{@repo}/pull/#{@pr}"
 
-      if already_decided?(@head_sha)
-        log "status '#{@context}' already present on #{short(@head_sha)} — skipping (idempotent)"
+      if !@force && already_decided?(@head_sha)
+        log "status '#{@context}' already present on #{short(@head_sha)} — skipping (idempotent; set REVIEW_FORCE=1 to re-review)"
         return 0
       end
 
@@ -195,7 +232,9 @@ module CIReview
       @repo     = require_env(@env, 'GITHUB_REPOSITORY')
       @pr       = require_env(@env, 'PR_NUMBER')
       @gh_token = require_env(@env, 'GITHUB_TOKEN')
-      @api_key  = require_env(@env, 'ANTHROPIC_API_KEY')
+      # The API key is required only for the `api` backend; claude-cli
+      # authenticates through the local Claude Code login.
+      @api_key  = require_env(@env, 'ANTHROPIC_API_KEY') if @backend == 'api'
     end
 
     # --- GitHub -----------------------------------------------------------
@@ -260,9 +299,35 @@ module CIReview
       }
     end
 
-    # --- Anthropic --------------------------------------------------------
+    # --- review (backend dispatch) ----------------------------------------
 
     def review_diff(diff)
+      case @backend
+      when 'claude-cli' then claude_cli_review(diff)
+      when 'api'        then api_review(diff)
+      else raise ReviewFailure, "unknown REVIEW_BACKEND: #{@backend.inspect}"
+      end
+    end
+
+    # A verdict object parsed from raw text, validated to the same shape
+    # regardless of backend. Fails closed on anything unparseable/unrecognized.
+    def verdict_from_text(text)
+      raise ReviewFailure, 'empty model response' if text.to_s.strip.empty?
+
+      review = JSON.parse(text)
+      unless %w[APPROVE REQUEST_CHANGES].include?(review['verdict'])
+        raise ReviewFailure, "unrecognized verdict: #{review['verdict'].inspect}"
+      end
+
+      review['findings'] ||= []
+      review
+    rescue JSON::ParserError => e
+      raise ReviewFailure, "unparseable model response: #{e.message}"
+    end
+
+    # --- Anthropic API backend --------------------------------------------
+
+    def api_review(diff)
       body = {
         'model' => @model,
         'max_tokens' => @max_tokens,
@@ -293,17 +358,55 @@ module CIReview
              .select { |b| b['type'] == 'text' }
              .map { |b| b['text'] }
              .join
-      raise ReviewFailure, 'empty model response' if text.strip.empty?
-
-      review = JSON.parse(text)
-      unless %w[APPROVE REQUEST_CHANGES].include?(review['verdict'])
-        raise ReviewFailure, "unrecognized verdict: #{review['verdict'].inspect}"
-      end
-
-      review['findings'] ||= []
-      review
+      verdict_from_text(text)
     rescue JSON::ParserError => e
       raise ReviewFailure, "unparseable model response: #{e.message}"
+    end
+
+    # --- Claude Code (claude -p) local backend ----------------------------
+
+    def claude_cli_review(diff)
+      argv = [@claude_bin, '-p', '--model', @model,
+              '--output-format', 'json', '--no-session-persistence']
+      out, ok, err = @claude_runner.call(argv, build_cli_prompt(diff), @timeout)
+      raise ReviewFailure, "claude-cli failed: #{err.to_s.strip[0, 300]}" unless ok && !out.to_s.strip.empty?
+
+      envelope = JSON.parse(out)
+      if envelope['is_error'] || envelope['subtype'] != 'success'
+        raise ReviewFailure, "claude-cli error: #{truncate(envelope['result'].to_s, 200)}"
+      end
+
+      verdict_from_text(extract_json_object(envelope['result'].to_s))
+    rescue JSON::ParserError => e
+      raise ReviewFailure, "unparseable claude-cli output: #{e.message}"
+    end
+
+    def build_cli_prompt(diff)
+      <<~PROMPT
+        #{prompt_text}
+
+        Respond with ONLY a single JSON object and nothing else — no prose, no
+        markdown fences. Shape:
+        {"verdict":"APPROVE"|"REQUEST_CHANGES","summary":"<one sentence>","findings":[{"severity":"blocker|high|medium|low|nit","title":"...","file":"...","description":"..."}]}
+
+        Here is the pull request diff to review:
+
+        ```diff
+        #{diff}
+        ```
+      PROMPT
+    end
+
+    # `claude -p` returns the assistant's final text, which may (despite the
+    # instruction) be wrapped in prose or a ```json fence. Take the outermost
+    # {...} so the verdict parses regardless.
+    def extract_json_object(text)
+      t = text.to_s.strip
+      first = t.index('{')
+      last  = t.rindex('}')
+      return t unless first && last && last > first
+
+      t[first..last]
     end
 
     def anthropic_headers
@@ -331,6 +434,10 @@ module CIReview
     end
 
     # --- helpers ----------------------------------------------------------
+
+    def truthy?(val)
+      %w[1 true yes on].include?(val.to_s.strip.downcase)
+    end
 
     def require_env(env, key)
       v = env[key]
