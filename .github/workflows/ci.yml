@@ -208,3 +208,29 @@ jobs:
         # again and asserts nothing duplicated (rebuild_rules! is DELETE + INSERT with no
         # transaction wrapper).
         run: ruby script/verify_global_rules.rb --round-trip
+
+  ci-review:
+    name: adversarial-review engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # ci-review/run_review.rb is the merge-gate engine every participating app pulls in via the
+    # reusable adversarial-review workflow. It runs unattended and its verdict decides whether a PR
+    # can merge, so a regression here is a governance failure. The suite exercises the fail-closed
+    # paths and — per this repo's VEN-1310 rule that a check unable to go red proves nothing —
+    # asserts the verdict->status mapping reaches BOTH success and failure (test_mapping_reaches_
+    # both_states), so `success` can never be silently aliased onto a rejected review.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Ruby syntax
+        run: |
+          set -euo pipefail
+          ruby -c ci-review/run_review.rb
+          ruby -c ci-review/test/run_review_test.rb
+
+      - name: Engine unit tests (no network, stdlib only)
+        run: ruby ci-review/test/run_review_test.rb
