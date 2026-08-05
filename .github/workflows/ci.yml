@@ -237,3 +237,38 @@ jobs:
         # Covers both backends: the Anthropic API path (CI) and the local
         # claude-cli path (script/review-pr, on a Claude subscription).
         run: ruby ci-review/test/run_review_test.rb
+
+  rubocop-harness:
+    name: rubocop-harness cops
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The shared comment-policy cops every participating app pulls in. Their
+    # verdicts shape those apps' CI, so a regression here is a governance failure.
+    defaults:
+      run:
+        working-directory: rubocop-harness
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: rubocop-harness
+
+      - name: Cop unit specs
+        run: bundle exec rspec
+
+      - name: Cops load and register
+        # A `require` that silently fails to register the cops would make every
+        # consuming app's `--only Harness/...` a no-op — green while asserting
+        # nothing (the VEN-1310 shape). Assert the department is actually present,
+        # and that the count is exactly the five cops this gem ships.
+        run: |
+          set -euo pipefail
+          count=$(bundle exec rubocop --require rubocop-harness --show-cops 2>/dev/null | grep -c '^Harness/')
+          echo "Harness cops registered: $count"
+          if [ "$count" -ne 5 ]; then
+            echo "::error::expected 5 Harness cops registered, found $count"
+            exit 1
+          fi
