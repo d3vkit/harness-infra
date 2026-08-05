@@ -13,7 +13,7 @@ Stack-specific universal rules live in the sibling files `global-rails.md`,
 ## Workflow
 
 - Prefer removing obsolete paths outright over keeping deprecated compatibility layers. If code, docs, scripts, or workflows are no longer the intended path, delete or rewrite them directly unless there is a strong, explicit reason to preserve compatibility.
-- Prefer what the framework or engine already provides over bypassing it. If a bypass is necessary, document the reason in code comments.
+- Prefer what the framework or engine already provides over bypassing it. If a bypass is necessary, document the reason where the comment policy directs it — a short "why" at the code site when a line or two suffices, otherwise a design-doc note with a pointer from the code — rather than assuming a long code comment is its right home.
 - Provide a direct status update in chat when implementation is complete or attention is required. Include completion/blocked state and the exact next action needed from the user when applicable.
 - No repository-managed cross-repo handoff docs. Summarize cross-repo work directly in the task/PR/thread context.
 - Use the Explore subagent to offload research tasks — it runs separately and returns only a summary, not raw file contents.
@@ -39,6 +39,13 @@ Stack-specific universal rules live in the sibling files `global-rails.md`,
 
 - Apply SOLID and clean-design principles — single responsibility, clear boundaries, dependency inversion. Prefer small, well-named units over large multi-purpose ones.
 - Never swallow errors silently. Every caught exception must be reported or logged explicitly, with enough context to diagnose it — never discard an error and continue. (The specific reporting mechanism is a stack concern.)
+
+## Comments
+
+- Comments must earn their place by carrying what the code cannot say about itself: a constraint, an invariant, a non-obvious reason, or an external-system quirk. A comment that only restates what the code already says is not documentation but a second copy that drifts out of sync, and because readers trust it a stale or wrong comment is worse than none. Make the code self-explanatory first — clear names, small single-purpose units — and reach for a comment only when the knowledge has genuinely nowhere else to live.
+- Delete, and never write in the first place, comments that add nothing over the code: narration that restates a name or the next statement (a "returns the user" line above a method that plainly returns the user), commented-out code, decorative section-divider banners, author or changelog notes, and historical framing that narrates what the code used to do ("legacy", "no longer", "used to", "formerly"). Version control already records history and authorship, so these carry no information a reader cannot get more reliably elsewhere and exist only to rot.
+- Relocate substantial rationale — multi-paragraph design reasoning, concurrency and lock-ordering invariants, protocol or hardware quirks, security arguments — out of the code and into the project's design docs (under `docs/design/` or the stack- or app-pinned location, for repos that keep them), leaving a one-line pointer at the code site. In a doc the reasoning is reviewed, versioned, and discoverable, and drift is caught by documentation review; buried in a long code comment it silently goes stale. Never delete such rationale in the name of removing comments — move it, because the knowledge it holds is usually the most expensive thing in the file.
+- Keep, and never strip as part of a cleanup, the comments that hold irreducible knowledge: a short note on a genuinely non-obvious constraint or external-system behaviour that cannot be inferred from the code, the structured API or interface documentation a public surface warrants (parameters, return values, raised errors, units), and the machine-read magic or pragma comments a file needs to compile or run. When you are unsure whether a specific comment is load-bearing, keep it and ask rather than delete — recovering a lost "why" costs far more than leaving one redundant line.
 
 ## Testing
 
