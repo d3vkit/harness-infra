@@ -1,0 +1,74 @@
+# Defaults for the Harness comment-policy cops. Injected into RuboCop's default
+# configuration when an app `require`s rubocop-harness (see lib/rubocop/harness/inject.rb).
+#
+# These enforce the mechanically decidable parts of the cross-app comment policy
+# seeded in harness-infra rules/global-common.md (## Comments). What is or is not
+# an "explanatory" comment is a judgement call and deliberately NOT encoded here.
+
+Harness/CommentBlockLength:
+  Description: >-
+    Extended rationale belongs in a design doc with a one-line pointer, not in a
+    long inline comment block that drifts out of sync.
+  Enabled: true
+  Max: 4
+  VersionAdded: '0.1.0'
+
+Harness/CommentedOutCode:
+  Description: 'Delete commented-out code; version control already preserves it.'
+  Enabled: true
+  # Skip deliberately-indented usage examples (`#   User.find(id)`), which the
+  # TranscriptionProviders::Base* classes carry legitimately.
+  AllowIndentedExamples: true
+  AllowedPatterns: []
+  VersionAdded: '0.1.0'
+
+Harness/AnnotationTicketRef:
+  Description: 'TODO/FIXME/HACK annotations must reference a tracker ticket.'
+  Enabled: true
+  Keywords:
+    - TODO
+    - FIXME
+    - HACK
+    - XXX
+    - OPTIMIZE
+  TicketPattern: '[A-Z]{2,}-\d+'
+  VersionAdded: '0.1.0'
+
+Harness/BannerComment:
+  Description: 'Decorative divider banners carry no information; remove them.'
+  Enabled: true
+  MinRepeat: 4
+  VersionAdded: '0.1.0'
+
+Harness/NarrationComment:
+  Description: >-
+    A lone comment above a method that only narrates what the method already
+    says. High false-positive risk, so off by default; enable per app once the
+    burn-down proves the hit rate.
+  Enabled: false
+  Verbs:
+    - Returns
+    - Return
+    - Sets
+    - Set
+    - Builds
+    - Build
+    - Fetches
+    - Fetch
+    - Creates
+    - Create
+    - Gets
+    - Get
+    - Adds
+    - Add
+    - Removes
+    - Remove
+    - Checks
+    - Check
+    - Updates
+    - Update
+    - Handles
+    - Handle
+    - Wraps
+    - Wrap
+  VersionAdded: '0.1.0'
