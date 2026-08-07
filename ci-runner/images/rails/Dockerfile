@@ -15,12 +15,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 # - postgresql-client: pg_isready / psql (supabase-parity waits + extension checks).
 # - imagemagick: Active Storage shells out to `convert`/`magick` to render image
 #   variants (e.g. profile avatar :thumb) in system specs; without it those specs 500.
+# - libvips42: apps whose variant_processor is :vips (Rails' default) reach images via
+#   ImageProcessing::Vips, which dlopens libvips at runtime through FFI; without the
+#   shared lib those jobs raise `cannot load such file -- vips` at db-prep/spec time.
 # - chromium (xtradeb PPA, a real native-arm64 .deb — ubuntu:24.04 has no usable
 #   chromium otherwise): headless browser for Cuprite/Ferrum `js: true` system specs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential pkg-config \
       libpq-dev postgresql-client libyaml-dev zlib1g-dev libssl-dev libreadline-dev \
-      imagemagick \
+      imagemagick libvips42 \
     && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository -y ppa:xtradeb/apps \
     && apt-get update \
